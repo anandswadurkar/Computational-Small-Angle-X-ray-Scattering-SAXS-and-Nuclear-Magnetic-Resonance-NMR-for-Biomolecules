@@ -55,6 +55,29 @@ V_WATER = 30.0            # volume of one water molecule, A^3
 _ELEMENTS = tuple(_CROMER_MANN)
 
 
+def _cdist(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Pairwise distances between two coordinate blocks.
+
+    Uses scipy when available because it writes straight into the output array
+    instead of materialising an (len(a), len(b), 3) difference first, which is
+    the allocation this module is trying to avoid.
+    """
+    try:
+        from scipy.spatial.distance import cdist
+        return cdist(a, b)
+    except Exception:
+        return np.sqrt(((a[:, None, :] - b[None, :, :]) ** 2).sum(-1))
+
+
+def _max_distance(xyz: np.ndarray, chunk: int) -> float:
+    """Largest interatomic distance, computed without an N x N matrix."""
+    best = 0.0
+    for start in range(0, len(xyz), chunk):
+        block = _cdist(xyz[start:start + chunk], xyz)
+        best = max(best, float(block.max()))
+    return best
+
+
 def atomic_form_factor(element: str, q: np.ndarray) -> np.ndarray:
     a, b, c = _CROMER_MANN[element]
     s2 = (q / (4.0 * np.pi)) ** 2
@@ -89,7 +112,8 @@ class ScatteringTables:
     @classmethod
     def from_coordinates(cls, xyz: np.ndarray, elements: list[str],
                          sasa_frac: np.ndarray, bin_width: float = 0.25,
-                         r_max: float | None = None) -> "ScatteringTables":
+                         r_max: float | None = None,
+                         chunk: int = 256) -> "ScatteringTables":
         """Build tables for one conformation.
 
         ``r_max`` fixes the binning so tables from different frames can be
@@ -103,39 +127,67 @@ class ScatteringTables:
         if xyz.shape != (n, 3) or sasa_frac.shape != (n,):
             raise ValueError("coordinates, elements and sasa_frac disagree on atom count")
 
-        d = np.linalg.norm(xyz[:, None, :] - xyz[None, :, :], axis=-1)
-        limit = d.max() + bin_width if r_max is None else r_max + bin_width
-        if d.max() > limit:
-            raise ValueError(
-                f"r_max={r_max} is smaller than the largest interatomic distance "
-                f"({d.max():.1f} A); frames would bin inconsistently")
+        # Distances are accumulated in row blocks rather than as one N x N
+        # matrix. A 2000-atom protein would otherwise need a 92 MB (N, N, 3)
+        # intermediate plus several 30 MB copies, and on a machine that is
+        # short of memory that allocation fails intermittently -- killing the
+        # interpreter rather than raising MemoryError. Blocking keeps the peak
+        # near 5 MB and costs nothing in accuracy; the histograms are identical.
+        limit = _max_distance(xyz, chunk) + bin_width if r_max is None else r_max + bin_width
         edges = np.arange(0.0, limit, bin_width)
         centres = 0.5 * (edges[:-1] + edges[1:])
-        flat = d.ravel()
+        nbins = centres.size
 
-        idx = {e: np.flatnonzero(np.array(elements) == e) for e in _ELEMENTS}
+        elements_arr = np.asarray(elements)
+        idx = {e: np.flatnonzero(elements_arr == e) for e in _ELEMENTS}
         idx = {e: v for e, v in idx.items() if v.size}
+        # position of each atom within its element group, for fast block slicing
+        group_of = {e: np.zeros(n, dtype=bool) for e in idx}
+        for e, rows in idx.items():
+            group_of[e][rows] = True
 
-        pair: dict[tuple[str, str], np.ndarray] = {}
-        for i, ea in enumerate(idx):
-            for eb in list(idx)[i:]:
-                sub = d[np.ix_(idx[ea], idx[eb])].ravel()
-                h, _ = np.histogram(sub, bins=edges)
-                # off-diagonal element pairs appear twice in the full double sum
-                pair[(ea, eb)] = h.astype(np.float64) * (1.0 if ea == eb else 2.0)
+        pair = {(ea, eb): np.zeros(nbins) for i, ea in enumerate(idx)
+                for eb in list(idx)[i:]}
+        elem_sasa = {e: np.zeros(nbins) for e in idx}
+        sasa_sasa = np.zeros(nbins)
+        order = list(idx)
 
-        elem_sasa: dict[str, np.ndarray] = {}
-        for ea, rows in idx.items():
-            w = np.repeat(np.ones(rows.size), n) * np.tile(sasa_frac, rows.size)
-            sub = d[rows, :].ravel()
-            h, _ = np.histogram(sub, bins=edges, weights=w)
-            elem_sasa[ea] = 2.0 * h            # cross term enters twice
+        for start in range(0, n, chunk):
+            stop = min(start + chunk, n)
+            block = _cdist(xyz[start:stop], xyz)        # (chunk, n), ~4 MB
+            if r_max is not None and block.max() > limit:
+                raise ValueError(
+                    f"r_max={r_max} is smaller than the largest interatomic distance "
+                    f"({block.max():.1f} A); frames would bin inconsistently")
+            rows_elem = elements_arr[start:stop]
 
-        ww = np.outer(sasa_frac, sasa_frac).ravel()
-        sasa_sasa, _ = np.histogram(flat, bins=edges, weights=ww)
+            for ea in order:
+                sel = np.flatnonzero(rows_elem == ea)
+                if not sel.size:
+                    continue
+                sub = block[sel]                         # rows of element ea
+
+                for eb in order:
+                    key = (ea, eb) if (ea, eb) in pair else (eb, ea)
+                    cols = idx[eb]
+                    h, _ = np.histogram(sub[:, cols].ravel(), bins=edges)
+                    # each unordered element pair is visited from both sides
+                    # across the full sweep, which supplies the factor of two
+                    # that off-diagonal pairs need; same-element pairs are
+                    # visited once per ordered pair, which is also correct.
+                    pair[key] += h
+
+                w = np.broadcast_to(sasa_frac, sub.shape)
+                h, _ = np.histogram(sub.ravel(), bins=edges, weights=w.ravel())
+                elem_sasa[ea] += 2.0 * h
+
+            ws = sasa_frac[start:stop, None] * sasa_frac[None, :]
+            h, _ = np.histogram(block.ravel(), bins=edges, weights=ws.ravel())
+            sasa_sasa += h
+            del block
 
         return cls(r=centres, pair=pair, elem_sasa=elem_sasa,
-                   sasa_sasa=sasa_sasa.astype(np.float64), n_atoms=n)
+                   sasa_sasa=sasa_sasa, n_atoms=n)
 
     @classmethod
     def average(cls, tables: list["ScatteringTables"]) -> "ScatteringTables":
