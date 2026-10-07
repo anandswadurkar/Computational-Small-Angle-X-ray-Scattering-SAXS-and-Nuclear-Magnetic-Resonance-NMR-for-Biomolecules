@@ -138,44 +138,32 @@ from conda-forge. Both pins are there for reasons documented in that file; relax
 reintroduces crashes that are hard to attribute. In particular, avoid `pip install`-ing a
 compiled package into this environment on top of its conda build.
 
-**The environment must be activated.** On Windows, conda keeps its compiled libraries in
-`<env>\Library\bin`, which only joins the DLL search path on activation. Invoking the
-environment's `python.exe` by its full path instead makes NumPy's linear algebra abort the
-interpreter — a hard process exit with no Python traceback, which is extremely misleading
-to diagnose. Use `conda activate`, or `conda run -n saxsnmr`.
+**On Windows, activation matters.** Conda keeps its compiled libraries in
+`<env>\Library\bin`, which only joins PATH on activation. Invoking the environment's
+`python.exe` by its full path instead makes NumPy's linear algebra abort the interpreter —
+a hard process exit with no Python traceback, which is extremely misleading to diagnose.
+
+Importing `saxsnmr` repairs this automatically, so scripts and notebooks work either way.
+For anything that uses NumPy or OpenMM *before* importing `saxsnmr`, activate first with
+`conda activate saxsnmr` or `conda run -n saxsnmr`.
+
+Note that `os.add_dll_directory` is **not** a sufficient substitute: it does not cover the
+transitive dependencies of the BLAS libraries. PATH is what works.
 
 ### Jupyter kernel
 
-This matters more than it sounds, because a Jupyter kernel *is* launched by calling
-`python.exe` directly. **`python -m ipykernel install` produces a kernel that crashes**
-on this platform: the notebook dies partway through with only "the kernel crashed" and no
-traceback. The kernel has to activate the environment first.
+A Jupyter kernel launches `python.exe` directly, so it does not get the activated PATH.
+That used to kill the kernel partway through the notebook with only "the kernel crashed"
+and no traceback.
 
-Create `%APPDATA%\jupyter\kernels\saxsnmr\launch.bat`:
+**Importing `saxsnmr` now repairs PATH itself**, so any kernel pointing at the
+environment's interpreter works, including one made with
+`python -m ipykernel install --user --name saxsnmr`. Import it before anything that
+touches NumPy's linear algebra — the notebook's first cell does exactly that, and prints
+how many directories it added.
 
-```bat
-@echo off
-call "%USERPROFILE%\anaconda3\condabin\conda.bat" activate saxsnmr || exit /b 1
-python -m ipykernel_launcher %*
-```
-
-and `%APPDATA%\jupyter\kernels\saxsnmr\kernel.json`:
-
-```json
-{
-  "argv": ["%APPDATA%\\jupyter\\kernels\\saxsnmr\\launch.bat", "-f", "{connection_file}"],
-  "display_name": "Python (saxsnmr)",
-  "language": "python",
-  "metadata": {"debugger": true}
-}
-```
-
-Write the paths out in full — `kernel.json` does not expand environment variables. Then
-select **Python (saxsnmr)** as the notebook kernel. The notebook's first cell checks the
-environment and reports a readable error instead of dying silently.
-
-On Linux and macOS this is unnecessary; `python -m ipykernel install --user --name saxsnmr`
-is sufficient there.
+`saxsnmr.DLL_PATH_ADDED` lists the repair for diagnostics; it is empty when the
+environment was already activated.
 
 No SAXS calculator binary is required. `saxs.py` implements the scattering model directly,
 because neither FoXS nor Pepsi-SAXS offers a usable Windows build and CRYSOL needs a

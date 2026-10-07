@@ -16,12 +16,58 @@ See the README for what the resulting chi-squared does and does not establish.
 
 from __future__ import annotations
 
+import os as _os
+import sys as _sys
 from pathlib import Path
 
-import numpy as np
+
+def _repair_windows_dll_path() -> list[str]:
+    """Put the conda environment's library directories on PATH.
+
+    On Windows a conda environment's compiled libraries live in
+    ``<prefix>\\Library\\bin``, which is only added to PATH by ``conda
+    activate``. A process started from the environment's ``python.exe``
+    directly -- which is exactly how Jupyter and most IDEs launch a kernel --
+    never gets that, and the first call into NumPy's linear algebra then
+    terminates the process. There is no exception and no traceback: Jupyter
+    can only report "the kernel crashed", which gives no clue where to look.
+
+    Repairing PATH here makes the package work regardless of how the
+    interpreter was started. ``os.add_dll_directory`` is *not* sufficient --
+    it does not cover the transitive dependencies of the BLAS libraries --
+    and the BLAS DLL is loaded lazily on first use, so doing this at import
+    time is early enough even though NumPy may already be imported.
+
+    Returns the directories added, for diagnostics. A no-op off Windows.
+    """
+    if _sys.platform != "win32":
+        return []
+
+    prefix = Path(_sys.executable).parent
+    if not (prefix / "conda-meta").is_dir() and not (prefix.parent / "conda-meta").is_dir():
+        return []                      # not a conda environment; leave PATH alone
+
+    candidates = [prefix,
+                  prefix / "Library" / "mingw-w64" / "bin",
+                  prefix / "Library" / "usr" / "bin",
+                  prefix / "Library" / "bin",
+                  prefix / "Scripts",
+                  prefix / "bin"]
+    current = _os.environ.get("PATH", "")
+    present = {p.lower() for p in current.split(_os.pathsep) if p}
+    missing = [str(d) for d in candidates
+               if d.is_dir() and str(d).lower() not in present]
+    if missing:
+        _os.environ["PATH"] = _os.pathsep.join(missing + ([current] if current else []))
+    return missing
+
+
+DLL_PATH_ADDED = _repair_windows_dll_path()
+
+import numpy as np  # noqa: E402  -- must follow the PATH repair above
 
 from .fetch import Construct, Fetcher, SaxsCurve, StructureHit, summarise_constructs
-from .md import (MDResult, PreparedStructure, benchmark, prepare, run_md,
+from .md import (MDResult, PreparedStructure, benchmark, prepare, run_md,  # noqa: E402
                  sanitise_pdb)
 from .nmr import ShiftComparison, best_offset, compare_to_dssp, csi_assignment, secondary_shifts
 from .saxs import SaxsFit, ScatteringTables, fit, profile
@@ -35,6 +81,7 @@ __all__ = [
     "secondary_shifts", "csi_assignment", "compare_to_dssp", "best_offset",
     "ShiftComparison",
     "frame_tables", "ensemble_fit", "radius_of_gyration", "load_trajectory",
+    "DLL_PATH_ADDED",
 ]
 
 # Shrake-Rupley gives absolute SASA; dividing by a per-element maximum turns it
