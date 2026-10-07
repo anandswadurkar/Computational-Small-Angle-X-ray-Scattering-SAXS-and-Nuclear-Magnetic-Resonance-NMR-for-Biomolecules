@@ -141,6 +141,39 @@ environment's `python.exe` by its full path instead makes NumPy's linear algebra
 interpreter — a hard process exit with no Python traceback, which is extremely misleading
 to diagnose. Use `conda activate`, or `conda run -n saxsnmr`.
 
+### Jupyter kernel
+
+This matters more than it sounds, because a Jupyter kernel *is* launched by calling
+`python.exe` directly. **`python -m ipykernel install` produces a kernel that crashes**
+on this platform: the notebook dies partway through with only "the kernel crashed" and no
+traceback. The kernel has to activate the environment first.
+
+Create `%APPDATA%\jupyter\kernels\saxsnmr\launch.bat`:
+
+```bat
+@echo off
+call "%USERPROFILE%\anaconda3\condabin\conda.bat" activate saxsnmr || exit /b 1
+python -m ipykernel_launcher %*
+```
+
+and `%APPDATA%\jupyter\kernels\saxsnmr\kernel.json`:
+
+```json
+{
+  "argv": ["%APPDATA%\\jupyter\\kernels\\saxsnmr\\launch.bat", "-f", "{connection_file}"],
+  "display_name": "Python (saxsnmr)",
+  "language": "python",
+  "metadata": {"debugger": true}
+}
+```
+
+Write the paths out in full — `kernel.json` does not expand environment variables. Then
+select **Python (saxsnmr)** as the notebook kernel. The notebook's first cell checks the
+environment and reports a readable error instead of dying silently.
+
+On Linux and macOS this is unnecessary; `python -m ipykernel install --user --name saxsnmr`
+is sufficient there.
+
 No SAXS calculator binary is required. `saxs.py` implements the scattering model directly,
 because neither FoXS nor Pepsi-SAXS offers a usable Windows build and CRYSOL needs a
 licence that cannot be redistributed.
