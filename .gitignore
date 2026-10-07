@@ -1,0 +1,17 @@
+# Fetched source data and simulation output -- all regenerable
+cache/
+.cache/
+work/
+*.dcd
+*_sanitised.pdb
+
+# Bulk data formats that should never be committed
+*.zip
+*.mrc
+*.xlsx
+
+# Python / Jupyter
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
