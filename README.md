@@ -116,12 +116,58 @@ Lysozyme (UniProt **P00698**) is the development and regression target:
 
 If the harness cannot reproduce lysozyme, nothing else it reports is trustworthy.
 
+## Layout
+
+```
+saxsnmr/fetch.py   SASBDB, UniProt, PDBe/SIFTS, AlphaFold, BMRB
+saxsnmr/saxs.py    SAXS profile from coordinates, and chi-squared fitting
+saxsnmr/md.py      PDB sanitising, structure prep, implicit-solvent MD
+saxsnmr/nmr.py     secondary chemical shifts and comparison to DSSP
+notebooks/02_phase1_lysozyme.ipynb   the pipeline end to end
+```
+
+## Install
+
+```
+conda create -n saxsnmr -c conda-forge python=3.11 \
+    openmm pdbfixer mdtraj numpy scipy matplotlib pandas requests \
+    biopython py3dmol ipykernel
+conda activate saxsnmr
+```
+
+**The environment must be activated.** On Windows, conda keeps its compiled libraries in
+`<env>\Library\bin`, which only joins the DLL search path on activation. Invoking the
+environment's `python.exe` by its full path instead makes NumPy's linear algebra abort the
+interpreter — a hard process exit with no Python traceback, which is extremely misleading
+to diagnose. Use `conda activate`, or `conda run -n saxsnmr`.
+
+No SAXS calculator binary is required. `saxs.py` implements the scattering model directly,
+because neither FoXS nor Pepsi-SAXS offers a usable Windows build and CRYSOL needs a
+licence that cannot be redistributed.
+
+## Platform notes
+
+**Use the CPU platform.** On the development machine (Intel Iris Xe integrated graphics),
+`python -m openmm.testInstallation` reports OpenCL forces differing from CPU by 0.13, where
+CPU and Reference agree to 6e-06. A platform computing wrong forces still produces a
+trajectory that looks plausible. Verify this on your own hardware before using any platform
+other than CPU.
+
+**`mdtraj.load` is unusable here** and aborts the interpreter even under an activated
+environment, while mdtraj's low-level readers and geometry routines are fine. Use
+`saxsnmr.load_trajectory`, which goes through those directly.
+
 ## Status
 
-Early development. SASBDB access notebooks are working; the MD and observable-comparison
-stages are not yet implemented.
+Working: the fetch-and-join layer, structure sourcing and preparation, the SAXS calculator,
+and the NMR comparison. Verified against lysozyme — the 0.65 A structure `2vb1` fitted to
+SASBDB entry `SASDMJ2` gives reduced chi-squared **1.67** (c1 = 1.023, c2 = 0.007), with a
+model Rg of 14.00 A against an experimental Guinier Rg of 13.98 A.
 
-## Requirements
+Not yet characterised: MD throughput on laptop-class hardware. Run the benchmark cell in
+the notebook before planning trajectory lengths.
 
-Python 3.12. The MD and analysis stack (OpenMM, PDBFixer, MDTraj, a SAXS calculator and a
-chemical shift predictor) is not yet pinned; see the notebooks for current dependencies.
+One caveat on the fitted parameters: `c1` and `c2` are defined by this implementation's own
+parameterisation of excluded volume and hydration, so their values are not directly
+comparable with the c1/c2 reported by CRYSOL or FoXS. Compare chi-squared between models
+computed the same way, not against literature values from another program.
