@@ -129,11 +129,14 @@ notebooks/02_phase1_lysozyme.ipynb   the pipeline end to end
 ## Install
 
 ```
-conda create -n saxsnmr -c conda-forge python=3.11 \
-    openmm pdbfixer mdtraj numpy scipy matplotlib pandas requests \
-    biopython py3dmol ipykernel
+conda env create -f environment.yml
 conda activate saxsnmr
 ```
+
+`environment.yml` pins `ipykernel` to 6.29 and `numpy` below 2.4, and takes everything
+from conda-forge. Both pins are there for reasons documented in that file; relaxing them
+reintroduces crashes that are hard to attribute. In particular, avoid `pip install`-ing a
+compiled package into this environment on top of its conda build.
 
 **The environment must be activated.** On Windows, conda keeps its compiled libraries in
 `<env>\Library\bin`, which only joins the DLL search path on activation. Invoking the
@@ -186,9 +189,10 @@ CPU and Reference agree to 6e-06. A platform computing wrong forces still produc
 trajectory that looks plausible. Verify this on your own hardware before using any platform
 other than CPU.
 
-**`mdtraj.load` is unusable here** and aborts the interpreter even under an activated
-environment, while mdtraj's low-level readers and geometry routines are fine. Use
-`saxsnmr.load_trajectory`, which goes through those directly.
+**Almost every "broken library" symptom on Windows traces back to activation.** NumPy's
+linear algebra, SciPy's optimisers and `mdtraj.load` all abort the process when the
+environment is not activated, and all work normally when it is. Before suspecting a
+package, confirm the environment is active.
 
 ## Status
 

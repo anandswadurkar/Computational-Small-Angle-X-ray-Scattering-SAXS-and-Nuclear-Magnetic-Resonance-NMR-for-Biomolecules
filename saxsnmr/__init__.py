@@ -45,12 +45,10 @@ _MAX_SASA = {"H": 0.6, "C": 1.2, "N": 1.1, "O": 1.1, "S": 1.5, "P": 1.5}
 def load_trajectory(path: str | Path, top: str | Path | None = None):
     """Load a PDB or DCD into an ``mdtraj.Trajectory``.
 
-    Deliberately avoids ``mdtraj.load``. That dispatcher aborts the interpreter
-    with a delay-load failure on this platform -- not an exception, a hard
-    process death -- while mdtraj's own low-level format readers and every
-    geometry routine built on them work correctly. Going through
-    ``PDBTrajectoryFile`` / ``DCDTrajectoryFile`` and constructing the
-    ``Trajectory`` directly sidesteps it with no loss of functionality.
+    A convenience wrapper that pairs a DCD with its topology, so callers do not
+    have to remember that a DCD carries no atom names and converts coordinates
+    from angstrom. ``mdtraj.load`` would serve equally well; this simply keeps
+    the call sites uniform across the two formats the project writes.
     """
     from mdtraj.core.trajectory import Trajectory
     from mdtraj.formats import DCDTrajectoryFile, PDBTrajectoryFile

@@ -1,0 +1,38 @@
+# Verified working environment. Create with:
+#     conda env create -f environment.yml
+#     conda activate saxsnmr
+#
+# Two pins are deliberate and should not be relaxed casually:
+#
+#   ipykernel 6.29  -- ipykernel 7 changed the kernel protocol and debugger
+#                      interface. VS Code's Jupyter extension is tested against
+#                      the 6.x line; with 7.x the kernel can die on connect,
+#                      reported only as "the kernel crashed".
+#   numpy  < 2.4    -- keeps the compiled extensions (mdtraj, scipy, openmm)
+#                      on a NumPy ABI they were built and tested against.
+#
+# Install everything from conda-forge. Mixing a pip build of a compiled package
+# into a conda environment is a reliable way to produce confusing crashes.
+
+name: saxsnmr
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.11
+  - numpy<2.4
+  - scipy
+  - matplotlib
+  - pandas
+  - requests
+
+  # structural biology
+  - openmm=8.6.*
+  - pdbfixer
+  - mdtraj
+  - biopython
+
+  # notebook
+  - ipykernel=6.29.*
+  - py3dmol
