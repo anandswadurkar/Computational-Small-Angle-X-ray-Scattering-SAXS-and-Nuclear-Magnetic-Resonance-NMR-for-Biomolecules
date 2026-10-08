@@ -66,18 +66,21 @@ DLL_PATH_ADDED = _repair_windows_dll_path()
 
 import numpy as np  # noqa: E402  -- must follow the PATH repair above
 
-from .fetch import Construct, Fetcher, SaxsCurve, StructureHit, summarise_constructs
+from .fetch import (Construct, Fetcher, Pddf, SaxsCurve,  # noqa: E402
+                    StructureHit, summarise_constructs)
 from .md import (MDResult, PreparedStructure, benchmark, prepare, run_md,  # noqa: E402
                  sanitise_pdb)
 from .nmr import ShiftComparison, best_offset, compare_to_dssp, csi_assignment, secondary_shifts
-from .saxs import SaxsFit, ScatteringTables, fit, profile
+from .saxs import (GuinierFit, SaxsFit, ScatteringTables, dmax_from_pr,  # noqa: E402
+                   fit, guinier, pair_distribution, profile, rg_from_pr)
 
 __version__ = "0.1.0"
 
 __all__ = [
-    "Fetcher", "SaxsCurve", "Construct", "StructureHit", "summarise_constructs",
+    "Fetcher", "SaxsCurve", "Pddf", "Construct", "StructureHit", "summarise_constructs",
     "prepare", "sanitise_pdb", "run_md", "benchmark", "PreparedStructure", "MDResult",
     "ScatteringTables", "profile", "fit", "SaxsFit",
+    "guinier", "GuinierFit", "pair_distribution", "rg_from_pr", "dmax_from_pr",
     "secondary_shifts", "csi_assignment", "compare_to_dssp", "best_offset",
     "ShiftComparison",
     "frame_tables", "ensemble_fit", "radius_of_gyration", "load_trajectory",
