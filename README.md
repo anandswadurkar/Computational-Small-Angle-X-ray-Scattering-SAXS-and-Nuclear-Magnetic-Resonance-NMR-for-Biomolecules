@@ -184,13 +184,40 @@ package, confirm the environment is active.
 
 ## Status
 
-Working: the fetch-and-join layer, structure sourcing and preparation, the SAXS calculator,
-and the NMR comparison. Verified against lysozyme — the 0.65 A structure `2vb1` fitted to
-SASBDB entry `SASDMJ2` gives reduced chi-squared **1.67** (c1 = 1.023, c2 = 0.007), with a
-model Rg of 14.00 A against an experimental Guinier Rg of 13.98 A.
+The pipeline runs end to end. Measured on lysozyme (`2vb1` against SASBDB `SASDMJ2`):
 
-Not yet characterised: MD throughput on laptop-class hardware. Run the benchmark cell in
-the notebook before planning trajectory lengths.
+| Model | reduced chi-squared | Rg |
+|---|---|---|
+| experiment | — | 13.98 A (Guinier) |
+| crystal structure `2vb1` | **1.67** | 14.00 A |
+| implicit-solvent MD ensemble | **14.5 – 20.2** | 14.2 – 14.4 A |
+
+**Short implicit-solvent MD makes agreement with SAXS substantially worse, not better.**
+The simulation expands the protein away from a crystal structure that already matched
+experiment, and SAXS is most sensitive to exactly that. The expansion appears within the
+first 2 ps and is unchanged across nonbonded cutoffs of 2.0, 1.5, 1.2 and 1.0 nm, so it is
+a systematic bias of the GB solvent model rather than a settings artifact. The fitted
+hydration parameter `c2` falls to its lower bound, consistent with a model that is already
+too large.
+
+That is a real result, not a bug: the harness was built to detect this kind of
+disagreement, and reporting it is the point. It does mean implicit solvent cannot support
+a claim about force-field accuracy against SAXS. Explicit solvent, on hardware that can
+afford it, is the route to that.
+
+NMR secondary-structure agreement is modest: 49.6% over 127 residues (helix 58.2%, strand
+26.3%) against BMRB 4562. Strand agreement below chance partly reflects the simulation and
+partly that the chemical shift index is weaker for strands than helices.
+
+### MD throughput
+
+Roughly **6.5–8.5 ns/day** for a 1960-atom protein on a 4-core/8-thread laptop CPU, about
+eleven times what the obvious settings give. The defaults in `run_md` encode this; see its
+docstring for why each was chosen. The largest single factor is the nonbonded cutoff, which
+at 2 nm enclosed every pair in the protein and so cost a great deal while achieving
+nothing.
+
+Run the notebook's benchmark cell on your own hardware before planning trajectory lengths.
 
 One caveat on the fitted parameters: `c1` and `c2` are defined by this implementation's own
 parameterisation of excluded volume and hydration, so their values are not directly
