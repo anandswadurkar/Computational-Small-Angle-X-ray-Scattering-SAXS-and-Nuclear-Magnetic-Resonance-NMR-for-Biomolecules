@@ -33,6 +33,7 @@ import requests
 __all__ = [
     "Fetcher",
     "SaxsCurve",
+    "Pddf",
     "Construct",
     "StructureHit",
 ]
@@ -53,18 +54,69 @@ _UNIT_TO_INV_ANGSTROM = {
 }
 
 
+def _nm_to_A(value: float | None) -> float | None:
+    """SASBDB reports Rg and Dmax in nm regardless of its angular unit."""
+    return None if value is None else float(value) * 10.0
+
+
+@dataclass
+class Pddf:
+    """An experimental pair-distance distribution, in Angstrom.
+
+    This is GNOM's indirect Fourier transform of the measured intensity, not
+    the raw data: its shape depends on the Dmax and regularisation the
+    depositor chose. Treat it as a second opinion about the molecule's size,
+    not as an independent measurement.
+    """
+
+    code: str
+    r: np.ndarray
+    p: np.ndarray
+    error: np.ndarray
+    source: str
+
+    @property
+    def dmax(self) -> float:
+        """Where GNOM's P(r) was terminated -- a fitted choice, not a datum."""
+        return float(self.r[-1])
+
+    @property
+    def rg(self) -> float:
+        """Rg from the second moment, the same way `rg_from_pr` computes it."""
+        total = self.p.sum()
+        if total <= 0:
+            return float("nan")
+        return float(np.sqrt((self.r ** 2 * self.p).sum() / (2.0 * total)))
+
+    def normalised(self) -> np.ndarray:
+        peak = self.p.max()
+        return self.p / peak if peak > 0 else self.p
+
+    def __repr__(self) -> str:
+        return (f"Pddf({self.code}, n={self.r.size}, "
+                f"Dmax={self.dmax:.1f} A, Rg={self.rg:.2f} A)")
+
+
 @dataclass
 class SaxsCurve:
-    """An experimental scattering curve, always in 1/A."""
+    """An experimental scattering curve, always in 1/A.
+
+    The reported Rg and Dmax are converted to **Angstrom** to match q, which
+    SASBDB does not do: it reports q in whichever unit `angular_unit` names but
+    always gives Rg and Dmax in nanometres. Mixing the two silently rescales
+    every length by ten, so the fields carry an explicit `_A` suffix. Anything
+    still reading `curve.guinier_rg` will fail loudly rather than be wrong.
+    """
 
     code: str
     q: np.ndarray
     intensity: np.ndarray
     sigma: np.ndarray | None
     original_unit: str
-    guinier_rg: float | None = None
-    pddf_rg: float | None = None
-    pddf_dmax: float | None = None
+    guinier_rg_A: float | None = None
+    guinier_rg_err_A: float | None = None
+    pddf_rg_A: float | None = None
+    pddf_dmax_A: float | None = None
 
     @property
     def q_range(self) -> tuple[float, float]:
@@ -84,9 +136,10 @@ class SaxsCurve:
             intensity=self.intensity[m],
             sigma=None if self.sigma is None else self.sigma[m],
             original_unit=self.original_unit,
-            guinier_rg=self.guinier_rg,
-            pddf_rg=self.pddf_rg,
-            pddf_dmax=self.pddf_dmax,
+            guinier_rg_A=self.guinier_rg_A,
+            guinier_rg_err_A=self.guinier_rg_err_A,
+            pddf_rg_A=self.pddf_rg_A,
+            pddf_dmax_A=self.pddf_dmax_A,
         )
 
     def __repr__(self) -> str:
@@ -146,7 +199,13 @@ class Fetcher:
         if binary:
             path.write_bytes(r.content)
             return r.content
-        path.write_text(r.text, encoding="utf-8")
+        # newline="" disables newline translation on write. Without it, text
+        # that already contains CRLF -- which these servers send -- has its LF
+        # translated again on Windows, producing CRLFCR... and a spurious blank
+        # line between every real one when the file is read back. Parsers that
+        # skip blanks survive that; anything that treats a blank line as the
+        # end of a block silently truncates at the first row.
+        path.write_text(r.text, encoding="utf-8", newline="")
         return r.text
 
     # ---------------------------------------------------------------- SASBDB
@@ -217,10 +276,61 @@ class Fetcher:
             intensity=np.asarray(i),
             sigma=None if np.all(np.isnan(sig)) else sig,
             original_unit=declared,
-            guinier_rg=entry.get("guinier_rg"),
-            pddf_rg=entry.get("pddf_rg"),
-            pddf_dmax=entry.get("pddf_dmax"),
+            # SASBDB reports these in nm whatever angular_unit says; see the
+            # SaxsCurve docstring for why they are converted here.
+            guinier_rg_A=_nm_to_A(entry.get("guinier_rg")),
+            guinier_rg_err_A=_nm_to_A(entry.get("guinier_rg_error")),
+            pddf_rg_A=_nm_to_A(entry.get("pddf_rg")),
+            pddf_dmax_A=_nm_to_A(entry.get("pddf_dmax")),
         )
+
+    def pddf(self, code: str) -> "Pddf":
+        """Experimental P(r), parsed from the deposited GNOM output file.
+
+        SASBDB links the raw `.out` file that ATSAS GNOM produced. Everything
+        before the distance-distribution block is GNOM's own log -- settings,
+        the regularised fit, perceptual criteria -- and is skipped. R is in
+        Angstrom in these files and the final row sits exactly at Dmax.
+        """
+        entry = self.sasbdb_entry(code)
+        url = entry.get("pddf_data")
+        if not url:
+            raise ValueError(f"{code}: no P(r) file deposited")
+
+        text = self._cached(f"sasbdb_{code}_pofr.out", url)
+        lines = text.splitlines()
+        start = None
+        for i, line in enumerate(lines):
+            parts = line.split()
+            if [p.upper() for p in parts[:3]] == ["R", "P(R)", "ERROR"]:
+                start = i + 1
+                break
+        if start is None:
+            raise ValueError(f"{code}: no 'R P(R) ERROR' block in the GNOM file")
+
+        r, p, err = [], [], []
+        for line in lines[start:]:
+            parts = line.split()
+            if not parts:
+                continue           # blank lines separate nothing here
+            if len(parts) != 3:
+                if r:
+                    break          # a real trailing section
+                continue
+            try:
+                vals = [float(x) for x in parts]
+            except ValueError:
+                if r:
+                    break
+                continue
+            r.append(vals[0])
+            p.append(vals[1])
+            err.append(vals[2])
+
+        if len(r) < 3:
+            raise ValueError(f"{code}: parsed only {len(r)} P(r) points")
+        return Pddf(code=code, r=np.asarray(r), p=np.asarray(p),
+                    error=np.asarray(err), source=url)
 
     # ------------------------------------------------------------- structures
 
@@ -337,8 +447,9 @@ def summarise_constructs(fetcher: Fetcher, codes: Iterable[str]) -> "Any":
                     "type": c.molecular_type,
                     "organism": c.organism,
                     "length": c.length,
-                    "guinier_rg": entry.get("guinier_rg"),
-                    "pddf_dmax": entry.get("pddf_dmax"),
+                    # Angstrom, like every other length this package returns.
+                    "guinier_rg_A": _nm_to_A(entry.get("guinier_rg")),
+                    "pddf_dmax_A": _nm_to_A(entry.get("pddf_dmax")),
                     "angular_unit": entry.get("angular_unit"),
                     "type_of_curve": entry.get("type_of_curve"),
                 })

@@ -14,9 +14,13 @@ structure-prediction tool.
 **In scope**
 
 - Small-angle X-ray scattering, fitted over the q range where the data actually lives
+- Standard SAXS diagnostics computed from the raw curve rather than taken on trust:
+  Guinier with a self-consistent range, Kratky, and P(r) against the deposited GNOM
+  transform
 - NMR chemical shifts
 - Short implicit-solvent MD, sized to run on a laptop
-- Optional point mutations as exploratory input to the same pipeline
+- Optional point mutations as exploratory input to the same pipeline, with a
+  seed-to-seed control so a difference can be told from noise
 
 **Explicitly out of scope**
 
@@ -32,12 +36,15 @@ structure-prediction tool.
 molecule name
   → SASBDB search              → entry code
   → SASBDB entry summary       → UniProt + sequence + experimental I(q)
+  → Guinier + Kratky           → Rg recomputed from the raw data; is it folded?
+  → SASBDB GNOM file           → experimental P(r)
   → PDBe best_structures       → ranked experimental PDB structure
                                  (AlphaFold DB as fallback)
   → BMRB UniProt mapping       → assigned chemical shifts
   → PDBFixer                   → structure prep, optional mutation
   → OpenMM                     → short implicit-solvent MD
   → SAXS calculator            → per-frame I(q), ensemble average, χ² vs experiment
+  → P(r) from coordinates      → real-space check, no free parameters
   → shift predictor            → predicted vs assigned shifts
 ```
 
@@ -90,13 +97,33 @@ declare `1/nm`. Always read the `angular_unit` field; never infer units from mag
 Guessing from magnitude silently inflates apparent q_max by 10× for a large minority of
 entries.
 
+**Lengths are in nanometres even when q is not.** SASBDB reports q in whatever
+`angular_unit` declares, but always reports Rg and Dmax in nm. Mixing the two rescales
+every length by ten — and 1.4 versus 14 is not obviously wrong at a glance. This package
+converts both to Ångström on the way in and names the fields `guinier_rg_A`,
+`pddf_rg_A`, `pddf_dmax_A` so that code written against the old names fails loudly
+instead of being quietly wrong.
+
 **A shared UniProt accession does not mean a shared molecule.** Entries for the same
 accession differ in construct, tags, truncation, pH, temperature, oligomeric state and
 ligands. Lysozyme (P00698) is a concrete example: deposited sequence lengths across its
 SASBDB entries include 129, 131, 149 and 213 residues, and `SASDMJ4` reports
-Rg ≈ 30 / Dmax ≈ 120 where the monomeric entries report Rg ≈ 1.4 / Dmax ≈ 4.2 — almost
-certainly a fibril sample. Construct metadata must be surfaced for the user to check, not
-silently joined away.
+Rg ≈ 303 Å / Dmax ≈ 1200 Å where the monomeric entries report Rg ≈ 14 Å / Dmax ≈ 42 Å —
+almost certainly a fibril sample. Construct metadata must be surfaced for the user to
+check, not silently joined away.
+
+**A Guinier fit must choose its own range.** The approximation holds only while qRg is
+below roughly 1.3, which is circular because the valid range depends on the Rg being
+measured. `guinier()` extends the window until the fitted Rg puts the last point past the
+limit, and flags a curve where no window qualifies rather than returning a number. Run
+against `SASDMJ4` it reports `[INVALID]` instead of a confident Rg of 303 Å.
+
+**Caching text on Windows corrupted it.** Downloads already carry CRLF, and writing them
+with `Path.write_text` translated the LF again, producing a blank line between every real
+one when read back. Parsers that skip blanks survived; the GNOM P(r) parser, which treats
+a blank line as the end of a block, silently returned a single data point. Cached text is
+now written with `newline=""`. **Caches created before this fix should be deleted** — the
+affected files are still on disk and still wrong.
 
 **SAXS fitting has free parameters.** Excluded volume and hydration contrast are fitted by
 most SAXS calculators. Report the fitted values alongside χ², or improvements will look
@@ -119,12 +146,18 @@ If the harness cannot reproduce lysozyme, nothing else it reports is trustworthy
 ## Layout
 
 ```
-saxsnmr/fetch.py   SASBDB, UniProt, PDBe/SIFTS, AlphaFold, BMRB
-saxsnmr/saxs.py    SAXS profile from coordinates, and chi-squared fitting
+saxsnmr/fetch.py   SASBDB, UniProt, PDBe/SIFTS, AlphaFold, BMRB, GNOM P(r)
+saxsnmr/saxs.py    I(q) from coordinates, Guinier, P(r), chi-squared fitting
 saxsnmr/md.py      PDB sanitising, structure prep, implicit-solvent MD
 saxsnmr/nmr.py     secondary chemical shifts and comparison to DSSP
+tools/make_notebook.py               generates the notebook; edit this, not the .ipynb
 notebooks/02_phase1_lysozyme.ipynb   the pipeline end to end
 ```
+
+The notebook is **build output**. Editing cells in Jupyter works for a quick experiment,
+but `python tools/make_notebook.py` overwrites it, so anything worth keeping belongs in
+the generator. Hand-editing `.ipynb` JSON is error-prone and its diffs are unreadable,
+which is the whole reason for generating it.
 
 ## Install
 
@@ -184,13 +217,21 @@ package, confirm the environment is active.
 
 ## Status
 
-The pipeline runs end to end. Measured on lysozyme (`2vb1` against SASBDB `SASDMJ2`):
+The pipeline runs end to end — all 20 code cells of `02_phase1_lysozyme.ipynb` in one
+pass. Measured on lysozyme (`2vb1` against SASBDB `SASDMJ2`):
 
-| Model | reduced chi-squared | Rg |
-|---|---|---|
-| experiment | — | 13.98 A (Guinier) |
-| crystal structure `2vb1` | **1.67** | 14.00 A |
-| implicit-solvent MD ensemble | **14.5 – 20.2** | 14.2 – 14.4 A |
+| Model | reduced χ² | Rg (Guinier / P(r)) | Dmax from P(r) |
+|---|---|---|---|
+| experiment | — | 13.98 ± 0.26 deposited, **14.07 recomputed** / 14.06 | 41.9 Å |
+| crystal structure `2vb1` | **1.66** | 14.00 / 13.90 | 42.1 Å |
+| implicit-solvent MD ensemble | **18.1 – 22.0** | 14.35 – 14.40 / 14.36 | 43.9 Å |
+
+### The data checks out; the simulation does not
+
+Recomputing the Guinier Rg from the raw curve gives 14.07 Å against the deposited
+13.98 ± 0.26 Å — 0.4σ, over a self-selected window of 64 points spanning qRg 0.11–1.29.
+The P(r) transform independently gives 14.06 Å. The experimental side of the comparison
+is sound, so disagreement is the model's.
 
 **Short implicit-solvent MD makes agreement with SAXS substantially worse, not better.**
 The simulation expands the protein away from a crystal structure that already matched
@@ -200,14 +241,43 @@ a systematic bias of the GB solvent model rather than a settings artifact. The f
 hydration parameter `c2` falls to its lower bound, consistent with a model that is already
 too large.
 
+The P(r) comparison confirms this in real space, where no scale factor, `c1` or `c2` is
+free to absorb anything: the MD ensemble reaches **43.9 Å** against an experimental Dmax
+of 41.9 Å, while the crystal structure sits at 42.1 Å. The disagreement is not an artifact
+of reciprocal-space fitting.
+
 That is a real result, not a bug: the harness was built to detect this kind of
 disagreement, and reporting it is the point. It does mean implicit solvent cannot support
-a claim about force-field accuracy against SAXS. Explicit solvent, on hardware that can
-afford it, is the route to that.
+a claim about force-field accuracy against SAXS.
 
-NMR secondary-structure agreement is modest: 49.6% over 127 residues (helix 58.2%, strand
+### How large a χ² difference means anything
+
+Running wild-type lysozyme twice, identical but for the random seed, gives χ² of 22.0 and
+18.1 — a spread of **3.8** between two runs of the same molecule.
+
+That is the noise floor for this configuration, and it is large. **Any χ² difference below
+about 4 at 5 ps carries no information**, which is why the range above is quoted as a range
+rather than a value. A 5 ps ensemble is not converged; it is long enough to show the
+systematic expansion, which is several times this spread, and not much else.
+
+This is also why the notebook's mutation section runs that control. E35Q — the catalytic
+general acid, a charge change with almost no shape change — shifts χ² by 2.4, *less* than
+the seed-to-seed spread. The correct conclusion is that the method cannot resolve it:
+
+```
+wild type (seed 0)   Rg 14.40 A   Dmax 43.9 A   chi2 22.0
+wild type (seed 1)   Rg 14.35 A   Dmax 43.9 A   chi2 18.1
+E35Q mutant          Rg 14.41 A   Dmax 44.1 A   chi2 19.6
+```
+
+There is also no experimental curve for E35Q in SASBDB, so there would be nothing to check
+a prediction against even if one could be resolved. Simulating a variant is easy; knowing
+whether the prediction is right is not.
+
+NMR secondary-structure agreement is modest: 48.8% over 127 residues (helix 55.7%, strand
 26.3%) against BMRB 4562. Strand agreement below chance partly reflects the simulation and
-partly that the chemical shift index is weaker for strands than helices.
+partly that the chemical shift index is weaker for strands than helices. These figures
+move by a point or two between runs, for the same reason the χ² values do.
 
 ### MD throughput
 
