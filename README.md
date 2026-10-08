@@ -16,6 +16,8 @@ structure-prediction tool.
 - Small-angle X-ray scattering, fitted over the q range where the data actually lives
 - NMR chemical shifts
 - Short implicit-solvent MD, sized to run on a laptop
+- Explicit-solvent MD on a GPU, added to answer a question the implicit-solvent result
+  raised rather than planned from the start (see Status)
 - Optional point mutations as exploratory input to the same pipeline
 
 **Explicitly out of scope**
@@ -121,9 +123,10 @@ If the harness cannot reproduce lysozyme, nothing else it reports is trustworthy
 ```
 saxsnmr/fetch.py   SASBDB, UniProt, PDBe/SIFTS, AlphaFold, BMRB
 saxsnmr/saxs.py    SAXS profile from coordinates, and chi-squared fitting
-saxsnmr/md.py      PDB sanitising, structure prep, implicit-solvent MD
+saxsnmr/md.py      PDB sanitising, structure prep, implicit and explicit solvent MD
 saxsnmr/nmr.py     secondary chemical shifts and comparison to DSSP
-notebooks/02_phase1_lysozyme.ipynb   the pipeline end to end
+notebooks/02_phase1_lysozyme.ipynb         the pipeline end to end, on a laptop
+notebooks/03_colab_explicit_solvent.ipynb  explicit solvent on a Colab GPU
 ```
 
 ## Install
@@ -204,6 +207,24 @@ That is a real result, not a bug: the harness was built to detect this kind of
 disagreement, and reporting it is the point. It does mean implicit solvent cannot support
 a claim about force-field accuracy against SAXS. Explicit solvent, on hardware that can
 afford it, is the route to that.
+
+### Explicit solvent
+
+`solvate` and `run_md_explicit` provide the explicit-solvent path — PME, NPT with a Monte
+Carlo barostat, and a protein-only trajectory so water never reaches disk. Solvating
+lysozyme takes it from 1,960 to 22,508 atoms in a 6.2 nm box, an 11.5x growth, which is why
+this needs a GPU; `notebooks/03_colab_explicit_solvent.ipynb` runs it on a free Colab T4.
+
+**No explicit-solvent result is reported here yet.** The code path is validated on CPU —
+PME setup, the barostat, the protein-only subset reporter, checkpoint write, resume, and
+that the output feeds `ensemble_fit` — but the CUDA platform and the physics have not been
+exercised, because this machine has no usable GPU. Treat the numbers in that notebook's
+comparison table as Phase 1's, with the explicit-solvent row still empty.
+
+Two details are worth knowing before running it. Solvation is slow and single-threaded (48
+minutes on the development laptop), so `solvate` reuses an existing box by default rather
+than rebuilding it after a reconnect. And `production_ns` is a cumulative target: re-running
+the MD cell resumes and extends rather than restarting, because Colab sessions drop.
 
 NMR secondary-structure agreement is modest: 49.6% over 127 residues (helix 58.2%, strand
 26.3%) against BMRB 4562. Strand agreement below chance partly reflects the simulation and

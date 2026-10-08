@@ -67,8 +67,9 @@ DLL_PATH_ADDED = _repair_windows_dll_path()
 import numpy as np  # noqa: E402  -- must follow the PATH repair above
 
 from .fetch import Construct, Fetcher, SaxsCurve, StructureHit, summarise_constructs
-from .md import (MDResult, PreparedStructure, benchmark, prepare, run_md,  # noqa: E402
-                 sanitise_pdb)
+from .md import (MDResult, PreparedStructure, SolvatedSystem,  # noqa: E402
+                 benchmark, prepare, run_md, run_md_explicit, sanitise_pdb,
+                 solvate)
 from .nmr import ShiftComparison, best_offset, compare_to_dssp, csi_assignment, secondary_shifts
 from .saxs import SaxsFit, ScatteringTables, fit, profile
 
@@ -77,6 +78,7 @@ __version__ = "0.1.0"
 __all__ = [
     "Fetcher", "SaxsCurve", "Construct", "StructureHit", "summarise_constructs",
     "prepare", "sanitise_pdb", "run_md", "benchmark", "PreparedStructure", "MDResult",
+    "solvate", "run_md_explicit", "SolvatedSystem",
     "ScatteringTables", "profile", "fit", "SaxsFit",
     "secondary_shifts", "csi_assignment", "compare_to_dssp", "best_offset",
     "ShiftComparison",
