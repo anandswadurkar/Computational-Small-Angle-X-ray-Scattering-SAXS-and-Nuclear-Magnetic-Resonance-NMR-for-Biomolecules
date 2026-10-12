@@ -17,10 +17,12 @@ structure-prediction tool.
 - Standard SAXS diagnostics computed from the raw curve rather than taken on trust:
   Guinier with a self-consistent range, Kratky, and P(r) against the deposited GNOM
   transform
-- NMR chemical shifts
+- NMR chemical shifts, scored against a majority-class baseline and the crystal
+  structure so that an agreement figure can be interpreted
 - Short implicit-solvent MD, sized to run on a laptop
-- Optional point mutations as exploratory input to the same pipeline, with a
-  seed-to-seed control so a difference can be told from noise
+- Optional point mutations as exploratory input to the same pipeline, run as replicates
+  against a wild-type control so an effect can be told from seed noise, and reported with
+  the smallest difference the replicates could actually resolve
 
 **Explicitly out of scope**
 
@@ -45,8 +47,14 @@ molecule name
   → OpenMM                     → short implicit-solvent MD
   → SAXS calculator            → per-frame I(q), ensemble average, χ² vs experiment
   → P(r) from coordinates      → real-space check, no free parameters
-  → shift predictor            → predicted vs assigned shifts
+  → CSI vs DSSP                → secondary structure, against two controls:
+                                 the crystal structure and a majority-class
+                                 predictor
 ```
+
+There is no shift predictor in that chain. SPARTA+, SHIFTX2 and UCBShift all lack a usable
+Windows build, so the NMR comparison goes through secondary chemical shifts instead — a
+weaker claim, and one that runs anywhere.
 
 ## Data sources
 
@@ -128,6 +136,20 @@ affected files are still on disk and still wrong.
 **SAXS fitting has free parameters.** Excluded volume and hydration contrast are fitted by
 most SAXS calculators. Report the fitted values alongside χ², or improvements will look
 more meaningful than they are.
+
+**Percentage agreement lies when classes are imbalanced.** Secondary structure is roughly
+40% helix / 10% strand / 50% coil, so a model that always answers one class scores far
+above zero. This project reported an NMR agreement figure for some time before a
+majority-class baseline showed a no-information predictor beat it. Every classification
+result here now carries its own baseline and a Matthews correlation; a percentage on its
+own is not evidence.
+
+**A control of one run against one run is not a control.** χ² at 5 ps moves by several
+units from the random seed alone, so a single pair reports whichever answer the seeds
+produced — this project published "within noise" and "worth investigating" from identical
+code on consecutive executions before replicates were added. Any comparison between two
+simulated conditions needs replicates on both sides and a stated detection limit; without
+the limit, a null result cannot be distinguished from an underpowered test.
 
 **Implicit solvent biases compaction.** GBSA-family models tend toward over-compact
 structures, and Rg is precisely what SAXS is most sensitive to. Treat χ² from
@@ -224,7 +246,7 @@ pass. Measured on lysozyme (`2vb1` against SASBDB `SASDMJ2`):
 |---|---|---|---|
 | experiment | — | 13.98 ± 0.26 deposited, **14.07 recomputed** / 14.06 | 41.9 Å |
 | crystal structure `2vb1` | **1.66** | 14.00 / 13.90 | 42.1 Å |
-| implicit-solvent MD ensemble | **18.1 – 22.0** | 14.35 – 14.40 / 14.36 | 43.9 Å |
+| implicit-solvent MD ensemble | **19.9 ± 1.5** (n=3) | 14.34 – 14.39 / 14.36 | 43.4 Å |
 
 ### The data checks out; the simulation does not
 
@@ -242,9 +264,13 @@ hydration parameter `c2` falls to its lower bound, consistent with a model that 
 too large.
 
 The P(r) comparison confirms this in real space, where no scale factor, `c1` or `c2` is
-free to absorb anything: the MD ensemble reaches **43.9 Å** against an experimental Dmax
+free to absorb anything: the MD ensemble reaches **43.4 Å** against an experimental Dmax
 of 41.9 Å, while the crystal structure sits at 42.1 Å. The disagreement is not an artifact
 of reciprocal-space fitting.
+
+The expansion is also far more reproducible than χ² is. Across six independent runs Rg
+stays within 14.34–14.43 Å (SD 0.03) while χ² ranges over 17.6–22.9. Rg is the better
+quantity to reason about here; χ² inherits noise from every point in the curve.
 
 That is a real result, not a bug: the harness was built to detect this kind of
 disagreement, and reporting it is the point. It does mean implicit solvent cannot support
@@ -252,32 +278,87 @@ a claim about force-field accuracy against SAXS.
 
 ### How large a χ² difference means anything
 
-Running wild-type lysozyme twice, identical but for the random seed, gives χ² of 22.0 and
-18.1 — a spread of **3.8** between two runs of the same molecule.
+Three wild-type replicates, identical but for the random seed, give χ² = **19.94 ± 1.54**.
+A 5 ps ensemble is not converged; it is long enough to show the systematic expansion,
+which is several times this scatter, and not much else.
 
-That is the noise floor for this configuration, and it is large. **Any χ² difference below
-about 4 at 5 ps carries no information**, which is why the range above is quoted as a range
-rather than a value. A 5 ps ensemble is not converged; it is long enough to show the
-systematic expansion, which is several times this spread, and not much else.
+**An earlier version of this section got this wrong, in a way worth recording.** It
+estimated the scatter from *two* runs and reported a "noise floor" of 3.8. Re-running the
+identical code gave 1.75 for the same quantity — and the mutation comparison built on top
+of it flipped from "within noise" to "worth investigating" between consecutive executions.
+A control made of one run versus one run estimates nothing; it converts whichever answer
+the seeds happened to give into something that reads like evidence.
 
-This is also why the notebook's mutation section runs that control. E35Q — the catalytic
-general acid, a charge change with almost no shape change — shifts χ² by 2.4, *less* than
-the seed-to-seed spread. The correct conclusion is that the method cannot resolve it:
+The notebook now runs three replicates per group and reports the detection limit:
 
 ```
-wild type (seed 0)   Rg 14.40 A   Dmax 43.9 A   chi2 22.0
-wild type (seed 1)   Rg 14.35 A   Dmax 43.9 A   chi2 18.1
-E35Q mutant          Rg 14.41 A   Dmax 44.1 A   chi2 19.6
+wild type chi2 :  19.94 +/- 1.54  (n=3)
+E35Q      chi2 :  20.35 +/- 2.68  (n=3)
+difference     :  +0.41   (+0.19 pooled SD)
+smallest difference these replicas could resolve (~2 SE) : 3.57
+Not resolvable.
 ```
+
+The difference is 0.41, against the 5.92 the two-run version reported for the same
+comparison. E35Q is the catalytic general acid — a charge change with almost no shape
+change — so "not resolvable" is the expected and correct answer.
+
+Note the detection limit. **"No significant difference" is uninformative without it**,
+because a null result and an underpowered test look identical. These replicates could not
+have found anything smaller than ~3.6 in χ², so this result bounds the effect rather than
+excluding it.
 
 There is also no experimental curve for E35Q in SASBDB, so there would be nothing to check
 a prediction against even if one could be resolved. Simulating a variant is easy; knowing
 whether the prediction is right is not.
 
-NMR secondary-structure agreement is modest: 48.8% over 127 residues (helix 55.7%, strand
-26.3%) against BMRB 4562. Strand agreement below chance partly reflects the simulation and
-partly that the chemical shift index is weaker for strands than helices. These figures
-move by a point or two between runs, for the same reason the χ² values do.
+### NMR: what a control revealed
+
+An earlier version of this README reported "48.8% agreement, strand 26.3%" and read it as
+a modest result partly reflecting the simulation. Adding two controls showed that reading
+was wrong, and that the metric was hiding the answer.
+
+**Control 1 — the crystal structure.** Compare the same NMR data against DSSP on `2vb1`
+instead of the trajectory. A 0.65 Å structure is as correct as a model gets, so it sets
+the ceiling. It scored 49.6%, statistically indistinguishable from the simulation's 48.8%.
+The simulation was never the limiting factor.
+
+**Control 2 — a majority-class predictor.** Answering "helix" for every residue scored
+**62.2%**, beating both. Any metric a no-information model wins is not reporting on
+structure.
+
+Two defects, found in that order:
+
+1. **The CSI threshold was applied at the wrong scale.** `±0.7 ppm` is the textbook value
+   for a *single* Δδ index; this code applies it to the difference `ΔδCA − ΔδCB`, which has
+   roughly twice the dynamic range because helix raises CA *and* lowers CB. Against a
+   measured standard deviation of 4.65 ppm, a ±0.7 band is a sliver: it assigned coil to 10
+   residues out of 129 where DSSP finds 63. The threshold is now 1.75 ppm, derived from
+   half the canonical helix/strand magnitude rather than tuned against a reference.
+
+2. **Raw agreement was the wrong metric**, and it was the one doing the damage. Matthews
+   correlation is 0.31 even at the old threshold — the index carried real signal the whole
+   time, and percentage agreement under class imbalance was simply unable to show it.
+
+After both fixes, against the crystal structure:
+
+| | MCC | agreement | majority baseline |
+|---|---|---|---|
+| threshold 0.7 (old) | 0.317 | 49.6% | 62.2% ✗ |
+| **threshold 1.75 (now)** | **0.440** | **63.8%** | 47.2% ✓ |
+
+MCC stays between 0.32 and 0.46 across thresholds from 0.7 to 3.5, so the conclusion does
+not depend on where the cut is drawn. The notebook reports that scan rather than a single
+number.
+
+Strand recall remains poor (23%) — but the crystal structure is barely better, so this is
+a property of the index, not of the simulation. Extended and polyproline-II backbone that
+DSSP calls coil carries strand-like shifts, so the index over-calls strand against *any*
+correct structure. Without the crystal control that looked like a simulation defect.
+
+`compare_to_dssp` now returns `mcc`, `baseline_agreement`, `balanced_accuracy` and a
+confusion matrix, and `ShiftComparison.__repr__` flags a result that fails to beat its own
+baseline.
 
 ### MD throughput
 

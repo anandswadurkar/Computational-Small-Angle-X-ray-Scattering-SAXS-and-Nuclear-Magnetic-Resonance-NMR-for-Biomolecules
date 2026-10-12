@@ -70,7 +70,9 @@ from .fetch import (Construct, Fetcher, Pddf, SaxsCurve,  # noqa: E402
                     StructureHit, summarise_constructs)
 from .md import (MDResult, PreparedStructure, benchmark, prepare, run_md,  # noqa: E402
                  sanitise_pdb)
-from .nmr import ShiftComparison, best_offset, compare_to_dssp, csi_assignment, secondary_shifts
+from .nmr import (ShiftComparison, best_offset, compare_to_dssp,  # noqa: E402
+                  csi_assignment, matthews_corrcoef, secondary_shifts,
+                  threshold_scan)
 from .saxs import (GuinierFit, SaxsFit, ScatteringTables, dmax_from_pr,  # noqa: E402
                    fit, guinier, pair_distribution, profile, rg_from_pr)
 
@@ -82,7 +84,7 @@ __all__ = [
     "ScatteringTables", "profile", "fit", "SaxsFit",
     "guinier", "GuinierFit", "pair_distribution", "rg_from_pr", "dmax_from_pr",
     "secondary_shifts", "csi_assignment", "compare_to_dssp", "best_offset",
-    "ShiftComparison",
+    "ShiftComparison", "matthews_corrcoef", "threshold_scan",
     "frame_tables", "ensemble_fit", "radius_of_gyration", "load_trajectory",
     "DLL_PATH_ADDED",
 ]

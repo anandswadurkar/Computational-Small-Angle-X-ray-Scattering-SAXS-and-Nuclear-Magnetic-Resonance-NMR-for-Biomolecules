@@ -56,6 +56,12 @@ This notebook runs the full loop end to end:
 Lysozyme is the regression target because it is exhaustively characterised.
 If the harness cannot reproduce lysozyme, nothing else it reports is
 trustworthy.
+
+**Expect about 25–30 minutes end to end on a laptop CPU**, almost all of it in
+section 7, which runs six short simulations to get replicates. Sections 1–6
+take a few minutes. Set `N_REPLICAS = 1` there if you only want to see the
+pipeline work — but read what that section says about why one run per group is
+not a control before trusting any number it then prints.
 """)
 
 md("""
@@ -135,7 +141,8 @@ from saxsnmr import (Fetcher, prepare, run_md, benchmark, ensemble_fit,
                      load_trajectory, guinier, pair_distribution,
                      rg_from_pr, dmax_from_pr)
 from saxsnmr.saxs import ScatteringTables, fit
-from saxsnmr.nmr import secondary_shifts, csi_assignment, best_offset
+from saxsnmr.nmr import (secondary_shifts, csi_assignment, best_offset,
+                         threshold_scan)
 
 WORK = Path("work")
 WORK.mkdir(exist_ok=True)
@@ -458,6 +465,14 @@ can be compared with DSSP over the trajectory.
 This checks that the ensemble has the right secondary structure where NMR says
 it should. It is a weaker claim than reproducing every shift, and it is the
 claim this notebook can actually support.
+
+**This section needs controls more than any other.** An agreement percentage
+on its own is uninterpretable: secondary structure classes are nowhere near
+equally populated, so a model that always answers "helix" can score well while
+containing no information at all. Two reference points are computed alongside
+the simulation — the crystal structure, which is as close to correct as a
+model gets, and a majority-class predictor, which is as close to useless as a
+model gets. The MD result only means something between them.
 """)
 
 code("""
@@ -479,14 +494,77 @@ shifts.head()
 code("""
 sec = secondary_shifts(shifts)
 csi = csi_assignment(sec)
-print(csi["csi"].value_counts().to_dict())
 
 dssp = mdt.compute_dssp(traj, simplified=True)
 resids = np.array([r.resSeq for r in traj.topology.residues])
-
 offset, comparison = best_offset(csi, dssp, resids)
-print(f"\\nbest numbering offset: {offset:+d}")
-print(comparison)
+print(f"best numbering offset: {offset:+d}")
+
+# The control: the same comparison against the crystal structure. A 0.65 A
+# experimental structure is about as right as a model gets, so it sets the
+# ceiling this method can reach. If MD matches it, MD is not the limitation.
+crystal_dssp = mdt.compute_dssp(static, simplified=True)
+crystal_resids = np.array([r.resSeq for r in static.topology.residues])
+_, crystal_cmp = best_offset(csi, crystal_dssp, crystal_resids)
+
+print()
+print(f"{'model':<20s} {'MCC':>7s} {'agree':>7s} {'baseline':>9s} {'balanced':>9s}")
+for name, c in [("crystal 2vb1", crystal_cmp), ("MD ensemble", comparison)]:
+    print(f"{name:<20s} {c.mcc:7.3f} {c.agreement:7.1%} "
+          f"{c.baseline_agreement:9.1%} {c.balanced_accuracy:9.1%}")
+
+print(f"\\nCSI assigns: {csi['csi'].value_counts().to_dict()}")
+print(f"DSSP on the crystal: "
+      f"{dict(zip(*np.unique(crystal_dssp[0], return_counts=True)))}")
+""")
+
+md("""
+Read **MCC** first — Matthews correlation, where 0 is chance and 1 is perfect.
+It accounts for the class imbalance that makes raw agreement misleading. The
+`baseline` column is what a predictor that always answers the commonest class
+would score; an agreement near that number means nothing.
+
+The confusion matrix shows *how* the two disagree, which a single percentage
+hides.
+""")
+
+code("""
+print("crystal structure — rows: NMR says, columns: structure says")
+print(crystal_cmp.confusion)
+print()
+print("MD ensemble")
+print(comparison.confusion)
+""")
+
+md("""
+### Does the answer depend on where the threshold is drawn?
+
+The CSI cut-off is a judgement call, so the sensitivity is reported rather
+than a single hand-picked number. If a conclusion only survives at one
+threshold, it belongs to that choice and not to the structure.
+
+The default of 1.75 ppm comes from the canonical secondary shifts: helix sits
+near +3.5 ppm on this index and strand near −3.7, so the boundary is placed at
+half the canonical magnitude. It is deliberately *not* tuned to maximise
+agreement, which would be fitting to the answer.
+""")
+
+code("""
+scan = threshold_scan(sec, crystal_dssp, crystal_resids)
+print("against the crystal structure:")
+print(scan.to_string(index=False, formatters={
+    "MCC": "{:.3f}".format, "agreement": "{:.1%}".format,
+    "baseline": "{:.1%}".format, "balanced": "{:.1%}".format}))
+
+fig, ax = plt.subplots(figsize=(7, 3.5))
+ax.plot(scan["threshold"], scan["MCC"], "o-", label="MCC (crystal structure)")
+ax.axvline(1.75, color="grey", ls=":", label="default threshold")
+ax.axhline(0, color="k", lw=0.5)
+ax.set_xlabel("CSI threshold on dCA - dCB  (ppm)")
+ax.set_ylabel("Matthews correlation")
+ax.set_ylim(0, max(0.6, scan["MCC"].max() * 1.2))
+ax.legend(fontsize=8)
+plt.tight_layout()
 """)
 
 code("""
@@ -498,9 +576,23 @@ ax.axhline(0.7, color="k", lw=0.5, ls=":")
 ax.axhline(-0.7, color="k", lw=0.5, ls=":")
 ax.set_xlabel("residue")
 ax.set_ylabel("secondary shift  dCA - dCB (ppm)")
-ax.set_title(f"NMR secondary shifts vs MD DSSP "
-             f"({comparison.agreement:.0%} agreement over {comparison.n_compared} residues)")
+ax.set_title(f"NMR secondary shifts vs MD DSSP  "
+             f"(MCC {comparison.mcc:.2f}, {comparison.agreement:.0%} agreement "
+             f"vs {comparison.baseline_agreement:.0%} baseline, "
+             f"n={comparison.n_compared})")
 plt.tight_layout()
+""")
+
+md("""
+### Reading the NMR result honestly
+
+Strand recall is the weak point, and it is a property of the method rather
+than of the simulation: the crystal structure scores barely better. Extended
+and polyproline-II backbone, which DSSP calls coil, carries strand-like
+chemical shifts, so the index over-calls strand against any correct structure.
+
+That is the value of running the crystal control. Without it, poor strand
+agreement looks like evidence that the simulation lost its beta sheet.
 """)
 
 md("""
@@ -516,12 +608,20 @@ shape. That makes it a good test of the method's limits, because a change that
 drastic for the enzyme's *function* should be nearly invisible to SAXS, which
 only sees the shape.
 
-So the run below has a control. Wild type is simulated a second time with a
-different random seed, giving a baseline for how much two runs of the *same*
-molecule differ. A mutant-versus-wild-type difference only means something if
-it is larger than that.
+So the run below uses **replicates**, not a single pair. Three wild-type and
+three mutant simulations differ only in random seed, which estimates the
+scatter instead of assuming it.
 
-Without this control, any difference at all looks like a result.
+This matters more than it sounds. An earlier version compared one mutant run
+against two wild-type runs, and printed opposite conclusions on consecutive
+executions of identical code — "within noise" one time, "worth investigating"
+the next — because χ² at 5 ps moves by several units from seed alone. A
+control built from one pair has no power; it just launders whichever answer
+the seeds happened to give.
+
+Three per group is still a small sample. The cell below therefore reports the
+smallest difference it could actually resolve, so a null result can be read as
+"too noisy to tell" rather than "no effect".
 """)
 
 code("""
@@ -543,40 +643,76 @@ code("""
 MD_KW = dict(production_ps=5.0, equilibration_ps=2.0,
              frame_interval_ps=0.5, platform="CPU")
 
-mut_result = run_md(mut, WORK / "mutant_md", **MD_KW)
-print("mutant      ", mut_result)
-
-# The control: wild type again, identical except for the random seed.
-wt2_result = run_md(prep, WORK / "wt_repeat", seed=1, **MD_KW)
-print("wt (seed 1) ", wt2_result)
+# Replicates, not a single pair. Comparing one mutant run against one wild-type
+# run cannot work: chi-squared at 5 ps varies by several units between runs
+# that differ only in random seed, so a single pair produces whichever answer
+# the seeds happen to give. An earlier version of this notebook did exactly
+# that and reported "within noise" and "worth investigating" on consecutive
+# executions of identical code.
+#
+# Three each is still a small sample -- the detectable effect size below says
+# how small -- but it estimates a spread instead of assuming one.
+N_REPLICAS = 3
+wt_runs, mut_runs = [], []
+for i in range(N_REPLICAS):
+    wt_runs.append(run_md(prep, WORK / f"wt_rep{i}", seed=i, **MD_KW))
+    mut_runs.append(run_md(mut, WORK / f"mut_rep{i}", seed=100 + i, **MD_KW))
+    print(f"replica {i}:  wt {wt_runs[-1].ns_per_day:5.2f} ns/day   "
+          f"mutant {mut_runs[-1].ns_per_day:5.2f} ns/day", flush=True)
 """)
 
 code("""
-rows = []
-for label, res in [("wild type (seed 0)", result),
-                   ("wild type (seed 1)", wt2_result),
-                   ("E35Q mutant", mut_result)]:
+import pandas as pd
+
+def measure(res, label, replica):
     tr = load_trajectory(res.trajectory, top=res.topology)
     f_ = ensemble_fit(res, curve, stride=1)
     r_, p_ = pair_distribution(f_.tables)
-    rows.append({"model": label,
-                 "Rg (A)": radius_of_gyration(tr).mean(),
-                 "Dmax (A)": dmax_from_pr(r_, p_),
-                 "chi2": f_.chi2, "c1": f_.c1, "c2": f_.c2})
+    return {"group": label, "replica": replica,
+            "Rg": radius_of_gyration(tr).mean(),
+            "Dmax": dmax_from_pr(r_, p_),
+            "chi2": f_.chi2, "c1": f_.c1, "c2": f_.c2}
 
-import pandas as pd
-table = pd.DataFrame(rows).set_index("model").round(3)
-print(table.to_string())
+rows = [measure(r, "wild type", i) for i, r in enumerate(wt_runs)]
+rows += [measure(r, "E35Q", i) for i, r in enumerate(mut_runs)]
+per_run = pd.DataFrame(rows)
+print(per_run.round(3).to_string(index=False))
 
-seed_spread = abs(table.loc["wild type (seed 1)", "chi2"]
-                  - table.loc["wild type (seed 0)", "chi2"])
-mutant_shift = abs(table.loc["E35Q mutant", "chi2"]
-                   - table.loc["wild type (seed 0)", "chi2"])
-print(f"\\nchi2 difference between two wild-type runs : {seed_spread:.3f}")
-print(f"chi2 difference, mutant vs wild type        : {mutant_shift:.3f}")
-print("\\nVERDICT:", "mutant effect is within run-to-run noise -- not resolvable"
-      if mutant_shift <= seed_spread else
-      "mutant effect exceeds the seed-to-seed baseline -- worth investigating")
+summary = per_run.groupby("group")[["Rg", "Dmax", "chi2"]].agg(["mean", "std"])
+print()
+print(summary.round(3).to_string())
+""")
+
+code("""
+wt = per_run[per_run["group"] == "wild type"]["chi2"]
+mu = per_run[per_run["group"] == "E35Q"]["chi2"]
+
+# Pooled standard deviation, then the difference expressed in units of it.
+# With three replicas per group this is a crude estimate; the point is to
+# compare the effect against the scatter rather than against zero.
+pooled = np.sqrt(((len(wt) - 1) * wt.std(ddof=1) ** 2
+                  + (len(mu) - 1) * mu.std(ddof=1) ** 2)
+                 / (len(wt) + len(mu) - 2))
+diff = mu.mean() - wt.mean()
+effect = diff / pooled if pooled > 0 else np.nan
+
+# Smallest difference these replicas could distinguish, roughly: with n per
+# group, the standard error of the difference is pooled * sqrt(2/n).
+sem_diff = pooled * np.sqrt(2.0 / len(wt))
+
+print(f"wild type chi2 : {wt.mean():6.2f} +/- {wt.std(ddof=1):.2f}  (n={len(wt)})")
+print(f"E35Q      chi2 : {mu.mean():6.2f} +/- {mu.std(ddof=1):.2f}  (n={len(mu)})")
+print(f"difference     : {diff:+6.2f}   ({effect:+.2f} pooled SD)")
+print(f"\\nstandard error of that difference : {sem_diff:.2f}")
+print(f"smallest difference these replicas could resolve (~2 SE) : {2 * sem_diff:.2f}")
+
+if abs(diff) < 2 * sem_diff:
+    print("\\nNot resolvable. The difference is smaller than this many replicas "
+          "can distinguish from zero.")
+else:
+    print("\\nThe difference exceeds what these replicas would produce by chance "
+          "alone. That is a reason to run more replicas, not a result: with "
+          f"n={len(wt)} per group the estimate of the spread is itself rough.")
 """)
 
 md("""
@@ -584,13 +720,23 @@ md("""
 
 With 5 ps and two free parameters, the expected outcome is that the mutant is
 **indistinguishable** from the wild type. That is the correct result, not a
-failure: E35Q is a charge change, SAXS at this resolution measures shape, and
-two runs of the same molecule already differ by a comparable amount.
+failure: E35Q is a charge change, and SAXS at this resolution measures shape.
 
-The general rule this illustrates: **a difference smaller than the method's own
-run-to-run variation is not a measurement.** Report the baseline whenever
-reporting a comparison, and note that the baseline here comes from a single
-pair of short runs, which is itself a weak estimate of the spread.
+Three general rules this section illustrates, in increasing order of how often
+they are forgotten:
+
+1. **A difference smaller than the method's own run-to-run variation is not a
+   measurement.** Always report the scatter next to the effect.
+2. **A control needs replicates.** One run versus one run estimates nothing; it
+   produces a number that looks like evidence. Watch what happens to the
+   conclusion if `N_REPLICAS` is set to 1.
+3. **A null result needs a detection limit.** "No significant difference" is
+   only informative alongside the smallest difference the experiment could have
+   found. Without it, a null is indistinguishable from an underpowered test.
+
+Note also that `c2` sits at its lower bound in every run, wild type and mutant
+alike. The hydration term is not doing any work here, so the comparison rests
+on excluded volume and shape alone.
 
 There is also no experimental curve for E35Q in SASBDB, so there is nothing to
 validate the mutant prediction against. Simulating a variant is easy; knowing
@@ -604,6 +750,8 @@ whether the prediction is right is not.
 - the SAXS calculator reproduces an experimental curve from coordinates, and
   recovers the deposited Guinier Rg from the raw data independently
 - the model's P(r) agrees with GNOM's in both Rg and extent
+- the NMR comparison carries real information (MCC ~0.44 on the crystal
+  structure), and beats a majority-class baseline
 - the pipeline runs on a variant, with a control that shows what size of
   difference would be meaningful
 
@@ -614,6 +762,9 @@ whether the prediction is right is not.
 - anything in the wide-angle regime, which is out of scope for this project.
 - any statement about a mutant. There is no experimental curve for E35Q to
   check against, and the predicted difference is within run-to-run noise.
+- any claim that MD reproduces secondary structure *better or worse* than the
+  crystal structure does. The two score the same, so this comparison cannot
+  separate them — it bounds the method, not the simulation.
 - the formal error on the Guinier Rg as an uncertainty. It is the covariance of
   a straight line, roughly ten times smaller than the honest figure.
 
