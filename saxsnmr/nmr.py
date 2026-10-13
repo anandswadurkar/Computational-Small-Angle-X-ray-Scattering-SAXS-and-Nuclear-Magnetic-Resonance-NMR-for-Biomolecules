@@ -26,7 +26,7 @@ import numpy as np
 
 __all__ = ["secondary_shifts", "csi_assignment", "compare_to_dssp",
            "ShiftComparison", "matthews_corrcoef", "threshold_scan",
-           "best_offset"]
+           "best_offset", "shift_dispersion"]
 
 # Random-coil 13C shifts, ppm (Wishart & Sykes). Glycine has no C-beta.
 _RANDOM_COIL_CA = {
@@ -94,6 +94,26 @@ def secondary_shifts(shifts):
                      else d_ca})
     out = pd.DataFrame(rows).sort_values("resid").reset_index(drop=True)
     return out
+
+
+def shift_dispersion(sec_shifts) -> float:
+    """Spread of the difference index, in ppm -- is this entry informative?
+
+    A folded protein with mixed secondary structure puts helix near +3.5 ppm
+    on this index and strand near -3.7, so the population standard deviation
+    should be around 3 ppm or more. An entry well below ~2 ppm is not
+    reporting conformational dispersion: it may be a denatured or
+    dynamically averaged sample, or shifts that already had a reference
+    subtracted before deposition.
+
+    Selecting entries on this is safe, because it looks only at the NMR data.
+    Selecting them on agreement with a structure would be fitting to the
+    answer. Among the RNase A entries, BMRB 16742 gives 0.59 ppm where five
+    others give 3.6-5.0 -- picking it produced an MCC of 0.009, and the
+    controls caught that only after the fact.
+    """
+    import numpy as _np
+    return float(_np.nanstd(sec_shifts["d_diff"].to_numpy(dtype=float)))
 
 
 def csi_assignment(sec_shifts, threshold: float = CSI_THRESHOLD):

@@ -289,13 +289,28 @@ class Fetcher:
 
         SASBDB links the raw `.out` file that ATSAS GNOM produced. Everything
         before the distance-distribution block is GNOM's own log -- settings,
-        the regularised fit, perceptual criteria -- and is skipped. R is in
-        Angstrom in these files and the final row sits exactly at Dmax.
+        the regularised fit, perceptual criteria -- and is skipped.
+
+        **R is in whatever length unit matches the entry's `angular_unit`**, not
+        always Angstrom: a curve deposited in 1/nm has its P(r) in nm. The file
+        itself carries no unit label, so this is only detectable by noticing
+        that Dmax came out ten times too small -- which is easy to miss when
+        the number is still plausible-looking. The conversion below uses the
+        same declared unit the curve does, and the result is always Angstrom.
         """
         entry = self.sasbdb_entry(code)
         url = entry.get("pddf_data")
         if not url:
             raise ValueError(f"{code}: no P(r) file deposited")
+
+        declared = (entry.get("angular_unit") or "").strip()
+        q_scale = _UNIT_TO_INV_ANGSTROM.get(declared.lower())
+        if q_scale is None:
+            raise ValueError(
+                f"{code}: unrecognised angular_unit {declared!r}; refusing to "
+                "guess the P(r) length unit.")
+        # q in 1/nm means lengths in nm, so r must be multiplied by 10.
+        r_scale = 1.0 / q_scale if q_scale != 1.0 else 1.0
 
         text = self._cached(f"sasbdb_{code}_pofr.out", url)
         lines = text.splitlines()
@@ -329,8 +344,20 @@ class Fetcher:
 
         if len(r) < 3:
             raise ValueError(f"{code}: parsed only {len(r)} P(r) points")
-        return Pddf(code=code, r=np.asarray(r), p=np.asarray(p),
+
+        pddf = Pddf(code=code, r=np.asarray(r) * r_scale, p=np.asarray(p),
                     error=np.asarray(err), source=url)
+
+        # Cross-check against the entry's own Dmax, which is reported in nm
+        # and converted on the way in. Disagreement means the unit inference
+        # above is wrong, and a silently rescaled P(r) is worse than none.
+        stated = _nm_to_A(entry.get("pddf_dmax"))
+        if stated and abs(pddf.dmax - stated) > max(1.0, 0.05 * stated):
+            raise ValueError(
+                f"{code}: P(r) ends at {pddf.dmax:.1f} A but the entry reports "
+                f"Dmax {stated:.1f} A. The GNOM file's length unit does not "
+                f"match angular_unit {declared!r}; not guessing.")
+        return pddf
 
     # ------------------------------------------------------------- structures
 

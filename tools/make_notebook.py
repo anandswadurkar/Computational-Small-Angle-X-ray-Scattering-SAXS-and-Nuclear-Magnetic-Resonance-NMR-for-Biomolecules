@@ -1,43 +1,230 @@
-"""Generate the Phase 1 notebook.
+"""Generate the validation notebooks, one per reference system.
 
-The notebook is build output; this file is the source. Editing cells in
+The notebooks are build output; this file is the source. Editing cells in
 Jupyter and saving works for a quick experiment, but the next run of this
-script overwrites it, so anything worth keeping belongs here.
+script overwrites them, so anything worth keeping belongs here.
 
-    python tools/make_notebook.py
+    python tools/make_notebook.py            # all systems
+    python tools/make_notebook.py lysozyme   # just one
+
+Every system runs the identical analysis. Only the molecule, the accessions
+and the system-specific commentary differ, which is the point: a harness that
+needed different handling per protein would not be a harness. Where a system
+has its own trap -- a cofactor the force field cannot represent, a chain that
+is not the first in the file -- it is named in that system's config rather
+than worked around silently.
 
 Hand-editing .ipynb JSON is error-prone and its diffs are unreadable, which is
 the whole reason for generating it.
 """
 import json
+import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-cells = []
-_counter = [0]
+
+@dataclass
+class System:
+    """One reference molecule and everything that differs because of it."""
+
+    index: str                  # notebook number prefix
+    slug: str                   # file name stem after the number
+    name: str                   # full name, for prose
+    short: str                  # short name, used inline
+    uniprot: str
+    sasbdb_code: str
+    search_term: str            # free-text SASBDB search
+    q_max: float                # trim point, 1/A
+    monomer_note: str           # how to spot a non-monomer in the survey
+    structure_note: str         # what preparation has to cope with
+    mutation: str               # PDBFixer notation
+    mutation_label: str         # e.g. "E35Q"
+    mutation_rationale: str     # why this residue
+    why_this_system: str        # opening framing
+    extra_caveats: list = field(default_factory=list)
+    n_replicas: int = 3
+    production_ps: float = 5.0
+    equilibration_ps: float = 2.0
+    frame_interval_ps: float = 0.5
+
+    @property
+    def filename(self) -> str:
+        return f"{self.index}_{self.slug}.ipynb"
 
 
-def _next_id():
-    _counter[0] += 1
-    return f"cell{_counter[0]:03d}"
+SYSTEMS = [
+    System(
+        index="02", slug="phase1_lysozyme",
+        name="hen egg white lysozyme", short="lysozyme",
+        uniprot="P00698", sasbdb_code="SASDMJ2", search_term="lysozyme",
+        q_max=0.50,
+        monomer_note=(
+            "Monomeric lysozyme is 129 residues with Rg ~14 A and Dmax ~42 A. "
+            "Entries reporting a much larger Rg or Dmax are aggregates or "
+            "fibrils rather than the folded monomer, and must not be averaged "
+            "together with it. `SASDMJ4` is the clearest example here: it "
+            "reports Rg ~303 A against the monomers' ~14 A."),
+        structure_note=(
+            "Lysozyme's best structure, `2vb1` at 0.65 A, needs all three: it "
+            "resolves its own hydrogens, carries altloc codes A/B/C, and "
+            "labels two different chains `A`."),
+        mutation="GLU-35-GLN", mutation_label="E35Q",
+        mutation_rationale=(
+            "Glu35 is lysozyme's catalytic general acid. **E35Q** is a classic "
+            "inactivating substitution: it removes the charge while keeping "
+            "almost exactly the same shape. That makes it a good test of the "
+            "method's limits, because a change that drastic for the enzyme's "
+            "*function* should be nearly invisible to SAXS, which only sees "
+            "the shape."),
+        why_this_system=(
+            "Lysozyme is the regression target because it is exhaustively "
+            "characterised. If the harness cannot reproduce lysozyme, nothing "
+            "else it reports is trustworthy."),
+    ),
+    System(
+        index="03", slug="phase1_rnase_a",
+        name="bovine pancreatic ribonuclease A", short="RNase A",
+        uniprot="P61823", sasbdb_code="SASDPF7", search_term="ribonuclease",
+        q_max=0.50,
+        monomer_note=(
+            "Monomeric RNase A is 124 residues with Rg ~15 A and Dmax ~46 A. "
+            "The entries here were collected by SEC-SAXS, where the sample is "
+            "separated immediately before measurement, so aggregates are far "
+            "less of a concern than in a batch experiment -- the four entries "
+            "agree on Rg to within 0.2 A."),
+        structure_note=(
+            "RNase A's best structure, `6etk` at 0.85 A, is comparable to "
+            "lysozyme's reference: high enough resolution to carry its own "
+            "hydrogens and alternate conformations. It has four disulfides, "
+            "which the force field handles but which make the fold stiff."),
+        mutation="HIS-12-ALA", mutation_label="H12A",
+        mutation_rationale=(
+            "His12 and His119 are RNase A's catalytic pair, acting as general "
+            "base and general acid. **H12A** abolishes activity. Like E35Q in "
+            "lysozyme it is a chemical change rather than a shape change, so "
+            "SAXS should not see it -- but unlike E35Q it removes a side chain "
+            "rather than swapping one, so PDBFixer's rebuilt rotamer matters "
+            "even less."),
+        why_this_system=(
+            "RNase A is the closest available analogue to lysozyme: a small, "
+            "rigid, exhaustively studied enzyme with a sub-Angstrom structure. "
+            "It exists here to answer whether the lysozyme result is a "
+            "property of lysozyme or of the method. A conclusion that holds "
+            "for one protein and not the other is a different kind of finding "
+            "from one that holds for both."),
+        extra_caveats=[
+            "The deposited curve is in 1/nm, not 1/A. The loader converts it "
+            "from the `angular_unit` field, and the deposited P(r) is "
+            "converted the same way -- GNOM writes r in whatever length unit "
+            "matches the input q, which is a silent factor of ten if assumed.",
+        ],
+    ),
+    System(
+        index="04", slug="phase1_cytochrome_c",
+        name="equine heart cytochrome c", short="cytochrome c",
+        uniprot="P00004", sasbdb_code="SASDAB2", search_term="cytochrome c",
+        q_max=0.50,
+        monomer_note=(
+            "Monomeric cytochrome c is ~104 residues with Rg ~13 A and "
+            "Dmax ~37 A. It is the smallest of the three reference systems, "
+            "so its simulations are correspondingly quicker."),
+        structure_note=(
+            "Cytochrome c's structure is solved as part of a larger assembly, "
+            "so the chain of interest is **not the first in the file**. The "
+            "chain identifier comes from the PDBe/SIFTS mapping rather than "
+            "being assumed, and `sanitise_pdb` has to discard the TER and "
+            "SSBOND records belonging to the chains it drops."),
+        mutation="MET-80-ALA", mutation_label="M80A",
+        mutation_rationale=(
+            "Met80 provides the sixth coordination bond to the heme iron, and "
+            "**M80A** is the classic substitution for opening that site. Note "
+            "the asymmetry with the other two systems: here the mutation's "
+            "whole significance is to a cofactor this simulation does not "
+            "contain (see the caveat below), so it is being used purely as a "
+            "shape perturbation."),
+        why_this_system=(
+            "Cytochrome c is a different fold class from the other two and it "
+            "carries a cofactor, which makes it the most honest of the three "
+            "about what this pipeline cannot do. It is included because a "
+            "harness that only ever sees cofactor-free globular enzymes will "
+            "not warn you when that assumption breaks."),
+        extra_caveats=[
+            "**The heme is not simulated.** amber14 has no parameters for "
+            "Fe-protoporphyrin IX, and `prepare` strips heterogens, so this "
+            "is apo-cytochrome c. The crystal structure still fits the "
+            "experimental curve well because the heme is a small fraction of "
+            "the total scattering, but the simulated protein is missing the "
+            "group its fold is built around. Treat any dynamics here as "
+            "indicative only -- over longer timescales apo-cytochrome c is "
+            "known to be a molten globule, and a longer run would show that "
+            "rather than the native state the experiment measured.",
+        ],
+    ),
+]
 
 
-def md(text):
-    cells.append({"cell_type": "markdown", "id": _next_id(), "metadata": {},
-                  "source": text.strip("\n").splitlines(keepends=True)})
+class Notebook:
+    """Accumulates cells for one notebook."""
+
+    def __init__(self, system: System):
+        self.s = system
+        self.cells = []
+        self._n = 0
+
+    def _id(self):
+        self._n += 1
+        return f"cell{self._n:03d}"
+
+    def _fill(self, text: str) -> str:
+        s = self.s
+        return (text
+                .replace("__UNIPROT__", s.uniprot)
+                .replace("__CODE__", s.sasbdb_code)
+                .replace("__TERM__", s.search_term)
+                .replace("__NAME__", s.name)
+                .replace("__SHORT__", s.short)
+                .replace("__QMAX__", f"{s.q_max:.2f}")
+                .replace("__MUT__", s.mutation)
+                .replace("__MUTLABEL__", s.mutation_label)
+                .replace("__NREP__", str(s.n_replicas))
+                .replace("__PRODPS__", f"{s.production_ps}")
+                .replace("__EQPS__", f"{s.equilibration_ps}")
+                .replace("__FRAMEPS__", f"{s.frame_interval_ps}"))
+
+    def md(self, text):
+        self.cells.append({
+            "cell_type": "markdown", "id": self._id(), "metadata": {},
+            "source": self._fill(text).strip("\n").splitlines(keepends=True)})
+
+    def code(self, text):
+        self.cells.append({
+            "cell_type": "code", "id": self._id(), "execution_count": None,
+            "metadata": {}, "outputs": [],
+            "source": self._fill(text).strip("\n").splitlines(keepends=True)})
+
+    def write(self):
+        nb = {"cells": self.cells,
+              "metadata": {
+                  "kernelspec": {"display_name": "Python (saxsnmr)",
+                                 "language": "python", "name": "saxsnmr"},
+                  "language_info": {"name": "python", "version": "3.11"}},
+              "nbformat": 4, "nbformat_minor": 5}
+        out = REPO / "notebooks" / self.s.filename
+        out.write_text(json.dumps(nb, indent=1), encoding="utf-8")
+        return out, len(self.cells)
 
 
-def code(text):
-    cells.append({"cell_type": "code", "id": _next_id(), "execution_count": None,
-                  "metadata": {}, "outputs": [],
-                  "source": text.strip("\n").splitlines(keepends=True)})
+def build(s: System) -> Notebook:
+    nb = Notebook(s)
+    md, code = nb.md, nb.code
+    runtime_min = int(6 + s.n_replicas * 2 * 3.5)
 
+    md(f"""
+# Validating short implicit-solvent MD against SAXS and NMR — {s.name}
 
-md("""
-# Phase 1 — validating short implicit-solvent MD against SAXS and NMR
-
-Reference system: **hen egg white lysozyme**, UniProt `P00698`.
+Reference system: **{s.name}**, UniProt `{s.uniprot}`.
 
 This notebook runs the full loop end to end:
 
@@ -49,25 +236,24 @@ This notebook runs the full loop end to end:
 5. prepare and simulate in implicit solvent
 6. compute an ensemble SAXS profile and fit it
 7. compare the distance distribution P(r) with the deposited GNOM transform
-8. compare NMR chemical shifts to the simulated secondary structure
-9. run a point mutant **with a seed-to-seed control**, to see whether the
-   method can resolve the change at all
+8. compare NMR chemical shifts to the simulated secondary structure, against
+   two controls
+9. run a point mutant **with replicates**, to see whether the method can
+   resolve the change at all
 
-Lysozyme is the regression target because it is exhaustively characterised.
-If the harness cannot reproduce lysozyme, nothing else it reports is
-trustworthy.
+{s.why_this_system}
 
-**Expect about 25–30 minutes end to end on a laptop CPU**, almost all of it in
-section 7, which runs six short simulations to get replicates. Sections 1–6
-take a few minutes. Set `N_REPLICAS = 1` there if you only want to see the
-pipeline work — but read what that section says about why one run per group is
-not a control before trusting any number it then prints.
+**Expect roughly {runtime_min}–{runtime_min + 10} minutes end to end on a laptop CPU**,
+almost all of it in section 7, which runs {s.n_replicas * 2} short simulations to get
+replicates. Sections 1–6 take a few minutes. Set `N_REPLICAS = 1` there if you
+only want to see the pipeline work — but read what that section says about why
+one run per group is not a control before trusting any number it then prints.
 """)
 
-md("""
+    md("""
 > **Use a kernel from the `saxsnmr` environment.**
 >
-> On Windows, conda keeps its compiled libraries in `<env>\Library\bin`, which only
+> On Windows, conda keeps its compiled libraries in `<env>\\Library\\bin`, which only
 > joins the search path when the environment is activated. A Jupyter kernel launches
 > `python.exe` directly, so it normally misses them, and the first call into NumPy's
 > linear algebra then kills the kernel with no exception and no traceback — reported
@@ -77,7 +263,7 @@ md("""
 > kernel was started. That is why the cell below imports it before anything else.
 """)
 
-code("""
+    code("""
 # Environment check. Run this first.
 #
 # Importing saxsnmr before anything else matters: on Windows it repairs PATH
@@ -120,14 +306,12 @@ if failed:
     print()
     print("Unusable:", ", ".join(failed))
     print("Select the 'Python (saxsnmr)' kernel, listed under Jupyter Kernels.")
-    print("If the kernel dies instead of printing this, it was started without")
-    print("the environment's library directory on PATH -- see the README.")
 else:
     import openmm
     print("\\nenvironment OK -- openmm", openmm.__version__)
 """)
 
-code("""
+    code("""
 import sys
 from pathlib import Path
 
@@ -144,13 +328,15 @@ from saxsnmr.saxs import ScatteringTables, fit
 from saxsnmr.nmr import (secondary_shifts, csi_assignment, best_offset,
                          threshold_scan)
 
-WORK = Path("work")
-WORK.mkdir(exist_ok=True)
-fetcher = Fetcher(cache_dir=WORK / "cache")
-UNIPROT = "P00698"
-""")
+# Simulation output is per system; the download cache is shared, so running a
+# second notebook does not re-fetch what the first already has.
+WORK = Path("work") / "__SLUG__"
+WORK.mkdir(parents=True, exist_ok=True)
+fetcher = Fetcher(cache_dir=Path("work") / "cache")
+UNIPROT = "__UNIPROT__"
+""".replace("__SLUG__", s.slug.replace("phase1_", "")))
 
-md("""
+    md("""
 ## 1. Which entries actually describe the same molecule?
 
 A shared UniProt accession identifies a *protein*, not a *sample*. Entries
@@ -167,8 +353,8 @@ every length by ten. This package converts both to Angstrom on the way in and
 marks the fields with an `_A` suffix, so the mistake cannot be made silently.
 """)
 
-code("""
-codes = fetcher.search_sasbdb("lysozyme")
+    code("""
+codes = fetcher.search_sasbdb("__TERM__")
 print(f"{len(codes)} candidate entries")
 
 survey = summarise_constructs(fetcher, codes[:12])
@@ -176,24 +362,22 @@ survey[["code", "uniprot", "length", "guinier_rg_A", "pddf_dmax_A",
         "angular_unit", "type_of_curve"]]
 """)
 
-md("""
+    md(f"""
 ### Reading the survey
 
-Monomeric lysozyme is 129 residues with Rg ~14 A and Dmax ~42 A. Entries
-reporting a much larger Rg or Dmax are aggregates or fibrils rather than the
-folded monomer, and must not be averaged together with it.
+{s.monomer_note}
 """)
 
-code("""
-CODE = "SASDMJ2"   # monomeric lysozyme
+    code("""
+CODE = "__CODE__"
 
 curve = fetcher.sasbdb_curve(CODE)
 print(curve)
-print(f"SASBDB Guinier Rg = {curve.guinier_rg_A:.2f} +/- {curve.guinier_rg_err_A:.2f} A")
+print(f"SASBDB Guinier Rg = {curve.guinier_rg_A:.2f} +/- {curve.guinier_rg_err_A or float('nan'):.2f} A")
 print(f"SASBDB P(r):  Rg = {curve.pddf_rg_A:.2f} A, Dmax = {curve.pddf_dmax_A:.1f} A")
 
 # Restrict to where an implicit hydration shell is valid (see README).
-curve = curve.trim(q_max=0.50)
+curve = curve.trim(q_max=__QMAX__)
 print("after trim:", curve)
 
 fig, ax = plt.subplots(figsize=(6, 4))
@@ -206,7 +390,7 @@ ax.set_title(f"{CODE} experimental")
 plt.tight_layout()
 """)
 
-md("""
+    md("""
 ## 1b. Is this curve what it claims to be?
 
 Before using an experimental curve to judge a model, check the curve. Two
@@ -227,17 +411,17 @@ Agreement between the two is a check on the whole loading path — units
 included.
 """)
 
-code("""
+    code("""
 g = guinier(curve.q, curve.intensity, curve.sigma)
 print(g)
 print(f"  fitted {g.n_points} points, q = {g.q[0]:.4f} - {g.q[-1]:.4f} 1/A")
-print(f"  SASBDB reports {curve.guinier_rg_A:.2f} +/- {curve.guinier_rg_err_A:.2f} A")
+print(f"  SASBDB reports {curve.guinier_rg_A:.2f} A")
 print(f"  difference: {abs(g.rg - curve.guinier_rg_A):.2f} A")
 if g.note:
     print("  note:", g.note)
 """)
 
-md("""
+    md("""
 Note the error bars. This fit's formal error is far smaller than the one
 SASBDB quotes, because it is the covariance of a straight line that assumes
 the deposited sigmas are exactly right. The real uncertainty is dominated by
@@ -247,7 +431,7 @@ the window; much above 1 means curvature, and therefore that the window is too
 wide or the sample is not monodisperse.
 """)
 
-code("""
+    code("""
 fig, (axg, axk) = plt.subplots(1, 2, figsize=(11, 4))
 
 # Guinier: a straight line here, curvature means trouble.
@@ -272,11 +456,11 @@ axk.legend(fontsize=8)
 plt.tight_layout()
 """)
 
-md("""
+    md("""
 For a compact, well-folded particle the Kratky peak sits near `qRg = 1.73`.
-Lysozyme should show that clearly. If a future target does not, the premise
-that one short trajectory represents its solution ensemble is already in
-doubt, and a poor chi-squared later would be a symptom rather than a cause.
+If a target does not show that, the premise that one short trajectory
+represents its solution ensemble is already in doubt, and a poor chi-squared
+later would be a symptom rather than a cause.
 
 ## 2. Coordinates
 
@@ -284,24 +468,27 @@ SASBDB links a structure for only about 15% of entries, so coordinates come
 from PDBe/SIFTS keyed on UniProt, falling back to AlphaFold.
 
 Preparation strips pre-existing hydrogens, resolves alternate conformations and
-selects a single chain. Lysozyme's best structure, `2vb1` at 0.65 A, needs all
-three: it resolves its own hydrogens, carries altloc codes A/B/C, and labels two
-different chains `A`.
+selects a single chain. """ + s.structure_note + """
+
+The chain identifier is taken from the SIFTS mapping rather than assumed to be
+`A`. For a protein solved inside a larger assembly it very often is not.
 """)
 
-code("""
-for hit in fetcher.best_structures(UNIPROT)[:5]:
-    print(f"  {hit.pdb_id} chain {hit.chain_id}  {hit.resolution} A  {hit.method}")
+    code("""
+hits = fetcher.best_structures(UNIPROT)[:5]
+for h in hits:
+    print(f"  {h.pdb_id} chain {h.chain_id}  {h.resolution} A  {h.method}")
 
+CHAIN = hits[0].chain_id
 structure, provenance = fetcher.structure_for(UNIPROT)
-print("\\nusing:", provenance)
+print("\\nusing:", provenance, "chain", CHAIN)
 
-prep = prepare(structure, WORK / "prepared.pdb", chain="A")
+prep = prepare(structure, WORK / "prepared.pdb", chain=CHAIN)
 print(f"{prep.n_residues} residues, {prep.n_atoms} atoms")
 print(prep.sequence)
 """)
 
-md("""
+    md("""
 ## 3. How fast can this machine actually simulate?
 
 Run this once. Throughput varies by more than an order of magnitude between
@@ -315,33 +502,39 @@ platform that computes the wrong forces will still happily produce a
 trajectory. Check your own output before trusting any platform other than CPU.
 """)
 
-code("""
+    code("""
 rates = benchmark(prep, ps=2.0, platforms=["CPU"])   # OpenCL is wrong here; Reference is very slow
 for name, ns_day in rates.items():
     print(f"  {name:<10} {ns_day:8.2f} ns/day" if np.isfinite(ns_day)
           else f"  {name:<10}      unavailable")
 """)
 
-md("""
+    md("""
 ## 4. Short implicit-solvent MD
 
-Implicit solvent is what puts this on a laptop. It also biases towards
-over-compact structures, and Rg is exactly what SAXS measures most sensitively —
-so treat the fit below as a check that the workflow is sound, not as a verdict
-on the force field.
+Implicit solvent is what puts this on a laptop. It also carries a known bias,
+and Rg is exactly what SAXS measures most sensitively — so treat the fit below
+as a check that the workflow is sound, not as a verdict on the force field.
+
+**One setting worth knowing about.** `run_md` leaves Debye screening at
+OpenMM's default, which is zero: the simulation has unscreened intramolecular
+electrostatics regardless of the salt the experiment was measured in. Testing
+this on lysozyme showed it does *not* explain the expansion seen there — but
+it is a mismatch with the experiment either way, and the buffer conditions are
+in the SASBDB entry if you want to check them for this system.
 """)
 
-code("""
-# run_md's tuned defaults give about 6.5-8.5 ns/day for this system on a
-# laptop CPU -- roughly eleven times the obvious settings, mostly from a
-# shorter nonbonded cutoff. 5 ps therefore takes about a minute; 50 ps is
-# around ten. Raise production_ps once the benchmark above tells you your rate.
-result = run_md(prep, WORK, production_ps=5.0, equilibration_ps=2.0,
-                frame_interval_ps=0.5, platform="CPU")
+    code("""
+# run_md's tuned defaults give roughly 4-8 ns/day for a system this size on a
+# laptop CPU -- several times what the obvious settings give, mostly from a
+# shorter nonbonded cutoff. Raise production_ps once the benchmark above tells
+# you your rate.
+result = run_md(prep, WORK, production_ps=__PRODPS__, equilibration_ps=__EQPS__,
+                frame_interval_ps=__FRAMEPS__, platform="CPU")
 print(result)
 """)
 
-code("""
+    code("""
 import mdtraj as mdt
 
 # load_trajectory pairs the DCD with its topology and converts units.
@@ -349,7 +542,7 @@ traj = load_trajectory(result.trajectory, top=result.topology)
 rg = radius_of_gyration(traj)
 
 fig, ax = plt.subplots(figsize=(6, 3))
-ax.plot(np.arange(len(rg)) * 0.5, rg, lw=1)
+ax.plot(np.arange(len(rg)) * __FRAMEPS__, rg, lw=1)
 ax.axhline(g.rg, color="crimson", ls="--",
            label=f"experimental Guinier Rg = {g.rg:.2f} A")
 ax.legend()
@@ -360,7 +553,7 @@ plt.tight_layout()
 print(f"simulated Rg = {rg.mean():.2f} +/- {rg.std():.2f} A")
 """)
 
-md("""
+    md("""
 ## 5. SAXS: ensemble profile and fit
 
 The experiment measures one ensemble-averaged curve, so the model must be
@@ -371,7 +564,7 @@ are reported alongside chi-squared deliberately — with two parameters floating
 a good fit alone does not establish much.
 """)
 
-code("""
+    code("""
 ens = ensemble_fit(result, curve, stride=1)
 print(ens)
 
@@ -381,7 +574,7 @@ single = fit(st, curve.q, curve.intensity, curve.sigma)
 print("single crystal structure:", single)
 """)
 
-code("""
+    code("""
 fig, (ax, axr) = plt.subplots(2, 1, figsize=(6.5, 6), sharex=True,
                               gridspec_kw={"height_ratios": [3, 1]})
 ax.errorbar(curve.q, curve.intensity, yerr=ens.sigma, fmt=".", ms=3, lw=0.5,
@@ -400,7 +593,7 @@ axr.set_ylabel("residual / sigma")
 plt.tight_layout()
 """)
 
-md("""
+    md("""
 ## 5b. The same comparison in real space
 
 Chi-squared is computed in reciprocal space, where a scale factor and two free
@@ -416,7 +609,7 @@ electron count with no hydration shell, where GNOM's reflects contrast against
 solvent. Compare the *shape and extent*, not the fine detail.
 """)
 
-code("""
+    code("""
 exp_pr = fetcher.pddf(CODE)
 print("experiment:", exp_pr)
 
@@ -431,7 +624,7 @@ print(f"{'crystal structure':22s} {rg_from_pr(r_x, p_x):8.2f}  {dmax_from_pr(r_x
 print(f"{'MD ensemble':22s} {rg_from_pr(r_m, p_m):8.2f}  {dmax_from_pr(r_m, p_m):9.1f}")
 """)
 
-code("""
+    code("""
 fig, ax = plt.subplots(figsize=(7, 4))
 ax.plot(exp_pr.r, exp_pr.normalised(), lw=2, color="k", label="experiment (GNOM)")
 ax.fill_between(exp_pr.r,
@@ -450,7 +643,7 @@ ax.legend(fontsize=8)
 plt.tight_layout()
 """)
 
-md("""
+    md("""
 A model whose P(r) extends past the experimental Dmax is too large — and
 because SAXS is most sensitive to exactly that, it is the first thing to check
 when chi-squared is poor.
@@ -462,10 +655,6 @@ on Windows. The portable route is secondary chemical shifts: subtracting
 random-coil values leaves a signal whose sign reports helix versus strand, which
 can be compared with DSSP over the trajectory.
 
-This checks that the ensemble has the right secondary structure where NMR says
-it should. It is a weaker claim than reproducing every shift, and it is the
-claim this notebook can actually support.
-
 **This section needs controls more than any other.** An agreement percentage
 on its own is uninterpretable: secondary structure classes are nowhere near
 equally populated, so a model that always answers "helix" can score well while
@@ -475,23 +664,66 @@ model gets, and a majority-class predictor, which is as close to useless as a
 model gets. The MD result only means something between them.
 """)
 
-code("""
-ids = fetcher.bmrb_ids(UNIPROT)
-print(f"{len(ids)} BMRB entries for {UNIPROT}: {ids[:10]}")
+    md("""
+### Choosing a BMRB entry
 
-shifts = None
+Several entries usually exist for one protein, and they are not
+interchangeable. Taking the first with enough CA shifts is not good enough:
+for RNase A that picks an entry whose secondary shifts have a standard
+deviation of 0.59 ppm where five other entries give 3.6–5.0 ppm. An entry with
+no dispersion is not reporting conformation — it may be a denatured or
+dynamically averaged sample, or shifts that already had a reference subtracted
+before deposition. Used unknowingly it produced an MCC of 0.009, and only the
+controls revealed that.
+
+Entries are therefore screened on `shift_dispersion`, which looks **only at the
+NMR data**. Screening them on agreement with the structure would be fitting to
+the answer.
+""")
+
+    code("""
+from saxsnmr import shift_dispersion
+
+ids = fetcher.bmrb_ids(UNIPROT)
+print(f"{len(ids)} BMRB entries for {UNIPROT}")
+
+MIN_DISPERSION = 2.0        # ppm; see shift_dispersion's docstring
+
+shifts, used, candidates = None, None, []
 for bid in ids:
     df = fetcher.bmrb_shifts(bid)
-    if df is not None and {"CA", "CB"} & set(df["atom"].str.upper()):
-        n_ca = (df["atom"].str.upper() == "CA").sum()
-        if n_ca > 50:
-            shifts, used = df, bid
-            break
-print(f"using BMRB {used}: {len(shifts)} assigned shifts, {n_ca} CA")
+    if df is None:
+        continue
+    atoms = df["atom"].str.upper()
+    n_ca, n_cb = int((atoms == "CA").sum()), int((atoms == "CB").sum())
+    if n_ca < 50 or n_cb < 50:
+        continue
+    sd = shift_dispersion(secondary_shifts(df))
+    candidates.append((bid, n_ca, n_cb, sd))
+
+# Take the most dispersed usable entry, not merely the first. Both criteria
+# look only at the NMR data, so neither biases the comparison that follows.
+usable = sorted([c for c in candidates if c[3] >= MIN_DISPERSION],
+                key=lambda c: -c[3])
+
+print(f"\\n{'BMRB':>8s} {'CA':>5s} {'CB':>5s} {'sd (ppm)':>9s}   note")
+for bid, n_ca, n_cb, sd in sorted(candidates, key=lambda c: -c[3]):
+    note = ("chosen -- most dispersed" if usable and bid == usable[0][0]
+            else "usable" if sd >= MIN_DISPERSION
+            else "rejected -- no conformational dispersion")
+    print(f"{bid:>8s} {n_ca:5d} {n_cb:5d} {sd:9.2f}   {note}")
+
+if not usable:
+    raise RuntimeError(
+        "no BMRB entry has both CA and CB coverage and enough dispersion to "
+        "be informative; the NMR comparison cannot be made for this system")
+used = usable[0][0]
+shifts = fetcher.bmrb_shifts(used)
+print(f"\\nusing BMRB {used}")
 shifts.head()
 """)
 
-code("""
+    code("""
 sec = secondary_shifts(shifts)
 csi = csi_assignment(sec)
 
@@ -500,16 +732,17 @@ resids = np.array([r.resSeq for r in traj.topology.residues])
 offset, comparison = best_offset(csi, dssp, resids)
 print(f"best numbering offset: {offset:+d}")
 
-# The control: the same comparison against the crystal structure. A 0.65 A
-# experimental structure is about as right as a model gets, so it sets the
-# ceiling this method can reach. If MD matches it, MD is not the limitation.
+# The control: the same comparison against the crystal structure. A
+# high-resolution experimental structure is about as right as a model gets, so
+# it sets the ceiling this method can reach. If MD matches it, MD is not the
+# limitation.
 crystal_dssp = mdt.compute_dssp(static, simplified=True)
 crystal_resids = np.array([r.resSeq for r in static.topology.residues])
 _, crystal_cmp = best_offset(csi, crystal_dssp, crystal_resids)
 
 print()
 print(f"{'model':<20s} {'MCC':>7s} {'agree':>7s} {'baseline':>9s} {'balanced':>9s}")
-for name, c in [("crystal 2vb1", crystal_cmp), ("MD ensemble", comparison)]:
+for name, c in [("crystal structure", crystal_cmp), ("MD ensemble", comparison)]:
     print(f"{name:<20s} {c.mcc:7.3f} {c.agreement:7.1%} "
           f"{c.baseline_agreement:9.1%} {c.balanced_accuracy:9.1%}")
 
@@ -518,7 +751,7 @@ print(f"DSSP on the crystal: "
       f"{dict(zip(*np.unique(crystal_dssp[0], return_counts=True)))}")
 """)
 
-md("""
+    md("""
 Read **MCC** first — Matthews correlation, where 0 is chance and 1 is perfect.
 It accounts for the class imbalance that makes raw agreement misleading. The
 `baseline` column is what a predictor that always answers the commonest class
@@ -528,7 +761,7 @@ The confusion matrix shows *how* the two disagree, which a single percentage
 hides.
 """)
 
-code("""
+    code("""
 print("crystal structure — rows: NMR says, columns: structure says")
 print(crystal_cmp.confusion)
 print()
@@ -536,7 +769,7 @@ print("MD ensemble")
 print(comparison.confusion)
 """)
 
-md("""
+    md("""
 ### Does the answer depend on where the threshold is drawn?
 
 The CSI cut-off is a judgement call, so the sensitivity is reported rather
@@ -549,7 +782,7 @@ half the canonical magnitude. It is deliberately *not* tuned to maximise
 agreement, which would be fitting to the answer.
 """)
 
-code("""
+    code("""
 scan = threshold_scan(sec, crystal_dssp, crystal_resids)
 print("against the crystal structure:")
 print(scan.to_string(index=False, formatters={
@@ -562,18 +795,18 @@ ax.axvline(1.75, color="grey", ls=":", label="default threshold")
 ax.axhline(0, color="k", lw=0.5)
 ax.set_xlabel("CSI threshold on dCA - dCB  (ppm)")
 ax.set_ylabel("Matthews correlation")
-ax.set_ylim(0, max(0.6, scan["MCC"].max() * 1.2))
+ax.set_ylim(min(0, scan["MCC"].min() * 1.2), max(0.6, scan["MCC"].max() * 1.2))
 ax.legend(fontsize=8)
 plt.tight_layout()
 """)
 
-code("""
+    code("""
 fig, ax = plt.subplots(figsize=(9, 3))
 t = comparison.table
 colors = {"H": "crimson", "E": "steelblue", "C": "lightgrey"}
 ax.bar(t["resid"], t["d_diff"], color=[colors.get(c, "grey") for c in t["csi"]])
-ax.axhline(0.7, color="k", lw=0.5, ls=":")
-ax.axhline(-0.7, color="k", lw=0.5, ls=":")
+ax.axhline(1.75, color="k", lw=0.5, ls=":")
+ax.axhline(-1.75, color="k", lw=0.5, ls=":")
 ax.set_xlabel("residue")
 ax.set_ylabel("secondary shift  dCA - dCB (ppm)")
 ax.set_title(f"NMR secondary shifts vs MD DSSP  "
@@ -583,76 +816,66 @@ ax.set_title(f"NMR secondary shifts vs MD DSSP  "
 plt.tight_layout()
 """)
 
-md("""
+    md("""
 ### Reading the NMR result honestly
 
-Strand recall is the weak point, and it is a property of the method rather
-than of the simulation: the crystal structure scores barely better. Extended
-and polyproline-II backbone, which DSSP calls coil, carries strand-like
-chemical shifts, so the index over-calls strand against any correct structure.
-
-That is the value of running the crystal control. Without it, poor strand
-agreement looks like evidence that the simulation lost its beta sheet.
+Compare the simulation against the crystal structure, not against 100%. If the
+crystal scores no better than the simulation, the comparison is bounded by the
+method rather than by the model, and a poor number says nothing about the
+dynamics. Strand recall in particular tends to be weak for any correct
+structure: extended and polyproline-II backbone, which DSSP calls coil, carries
+strand-like chemical shifts, so the index over-calls strand.
 """)
 
-md("""
+    md(f"""
 ## 7. Mutations — and whether this method can see one
 
 `prepare` takes mutations in PDBFixer's notation, so the same pipeline runs on
 a variant. The interesting question is not whether it runs, but whether the
 result means anything.
 
-Glu35 is lysozyme's catalytic general acid. **E35Q** is a classic inactivating
-substitution: it removes the charge while keeping almost exactly the same
-shape. That makes it a good test of the method's limits, because a change that
-drastic for the enzyme's *function* should be nearly invisible to SAXS, which
-only sees the shape.
+{s.mutation_rationale}
 
-So the run below uses **replicates**, not a single pair. Three wild-type and
-three mutant simulations differ only in random seed, which estimates the
-scatter instead of assuming it.
+So the run below uses **replicates**, not a single pair. {s.n_replicas} wild-type
+and {s.n_replicas} mutant simulations differ only in random seed, which estimates
+the scatter instead of assuming it.
 
-This matters more than it sounds. An earlier version compared one mutant run
-against two wild-type runs, and printed opposite conclusions on consecutive
-executions of identical code — "within noise" one time, "worth investigating"
-the next — because χ² at 5 ps moves by several units from seed alone. A
-control built from one pair has no power; it just launders whichever answer
-the seeds happened to give.
+This matters more than it sounds. An earlier version of this notebook compared
+one mutant run against two wild-type runs, and printed opposite conclusions on
+consecutive executions of identical code — "within noise" one time, "worth
+investigating" the next — because χ² at these trajectory lengths moves by
+several units from seed alone. A control built from one pair has no power; it
+just launders whichever answer the seeds happened to give.
 
-Three per group is still a small sample. The cell below therefore reports the
+{s.n_replicas} per group is still a small sample. The cell below therefore reports the
 smallest difference it could actually resolve, so a null result can be read as
 "too noisy to tell" rather than "no effect".
 """)
 
-code("""
+    code("""
 # PDBFixer rebuilds the side chain in a default rotamer without repacking its
-# neighbours -- fine for a conservative substitution like Glu -> Gln, poor for
-# small-to-large ones. Check the sequence actually changed before trusting it.
-mut = prepare(structure, WORK / "mutant.pdb", chain="A",
-              mutations=["GLU-35-GLN"])
+# neighbours -- fine for a conservative substitution, poor for small-to-large
+# ones. Check the sequence actually changed before trusting it.
+mut = prepare(structure, WORK / "mutant.pdb", chain=CHAIN,
+              mutations=["__MUT__"])
 print(f"mutant: {mut.n_residues} residues, {mut.n_atoms} atoms")
 
 wt_seq, mut_seq = prep.sequence, mut.sequence
 diffs = [(i + 1, a, b) for i, (a, b) in enumerate(zip(wt_seq, mut_seq)) if a != b]
 print("sequence differences (position, wild type, mutant):", diffs)
-assert diffs == [(35, "E", "Q")], "the mutation did not apply as intended"
+assert len(diffs) == 1, f"expected exactly one substitution, got {diffs}"
 """)
 
-code("""
+    code("""
 # Same settings as the wild-type run above, so the comparison is like for like.
-MD_KW = dict(production_ps=5.0, equilibration_ps=2.0,
-             frame_interval_ps=0.5, platform="CPU")
+MD_KW = dict(production_ps=__PRODPS__, equilibration_ps=__EQPS__,
+             frame_interval_ps=__FRAMEPS__, platform="CPU")
 
 # Replicates, not a single pair. Comparing one mutant run against one wild-type
-# run cannot work: chi-squared at 5 ps varies by several units between runs
-# that differ only in random seed, so a single pair produces whichever answer
-# the seeds happen to give. An earlier version of this notebook did exactly
-# that and reported "within noise" and "worth investigating" on consecutive
-# executions of identical code.
-#
-# Three each is still a small sample -- the detectable effect size below says
-# how small -- but it estimates a spread instead of assuming one.
-N_REPLICAS = 3
+# run cannot work: chi-squared varies by several units between runs that differ
+# only in random seed, so a single pair produces whichever answer the seeds
+# happen to give.
+N_REPLICAS = __NREP__
 wt_runs, mut_runs = [], []
 for i in range(N_REPLICAS):
     wt_runs.append(run_md(prep, WORK / f"wt_rep{i}", seed=i, **MD_KW))
@@ -661,7 +884,7 @@ for i in range(N_REPLICAS):
           f"mutant {mut_runs[-1].ns_per_day:5.2f} ns/day", flush=True)
 """)
 
-code("""
+    code("""
 import pandas as pd
 
 def measure(res, label, replica):
@@ -674,7 +897,7 @@ def measure(res, label, replica):
             "chi2": f_.chi2, "c1": f_.c1, "c2": f_.c2}
 
 rows = [measure(r, "wild type", i) for i, r in enumerate(wt_runs)]
-rows += [measure(r, "E35Q", i) for i, r in enumerate(mut_runs)]
+rows += [measure(r, "__MUTLABEL__", i) for i, r in enumerate(mut_runs)]
 per_run = pd.DataFrame(rows)
 print(per_run.round(3).to_string(index=False))
 
@@ -683,13 +906,13 @@ print()
 print(summary.round(3).to_string())
 """)
 
-code("""
+    code("""
 wt = per_run[per_run["group"] == "wild type"]["chi2"]
-mu = per_run[per_run["group"] == "E35Q"]["chi2"]
+mu = per_run[per_run["group"] == "__MUTLABEL__"]["chi2"]
 
 # Pooled standard deviation, then the difference expressed in units of it.
-# With three replicas per group this is a crude estimate; the point is to
-# compare the effect against the scatter rather than against zero.
+# With this few replicas it is a crude estimate; the point is to compare the
+# effect against the scatter rather than against zero.
 pooled = np.sqrt(((len(wt) - 1) * wt.std(ddof=1) ** 2
                   + (len(mu) - 1) * mu.std(ddof=1) ** 2)
                  / (len(wt) + len(mu) - 2))
@@ -701,7 +924,7 @@ effect = diff / pooled if pooled > 0 else np.nan
 sem_diff = pooled * np.sqrt(2.0 / len(wt))
 
 print(f"wild type chi2 : {wt.mean():6.2f} +/- {wt.std(ddof=1):.2f}  (n={len(wt)})")
-print(f"E35Q      chi2 : {mu.mean():6.2f} +/- {mu.std(ddof=1):.2f}  (n={len(mu)})")
+print(f"__MUTLABEL__      chi2 : {mu.mean():6.2f} +/- {mu.std(ddof=1):.2f}  (n={len(mu)})")
 print(f"difference     : {diff:+6.2f}   ({effect:+.2f} pooled SD)")
 print(f"\\nstandard error of that difference : {sem_diff:.2f}")
 print(f"smallest difference these replicas could resolve (~2 SE) : {2 * sem_diff:.2f}")
@@ -715,12 +938,8 @@ else:
           f"n={len(wt)} per group the estimate of the spread is itself rough.")
 """)
 
-md("""
+    md("""
 ### Reading this honestly
-
-With 5 ps and two free parameters, the expected outcome is that the mutant is
-**indistinguishable** from the wild type. That is the correct result, not a
-failure: E35Q is a charge change, and SAXS at this resolution measures shape.
 
 Three general rules this section illustrates, in increasing order of how often
 they are forgotten:
@@ -734,14 +953,13 @@ they are forgotten:
    only informative alongside the smallest difference the experiment could have
    found. Without it, a null is indistinguishable from an underpowered test.
 
-Note also that `c2` sits at its lower bound in every run, wild type and mutant
-alike. The hydration term is not doing any work here, so the comparison rests
-on excluded volume and shape alone.
+Note also whether `c2` sits at its lower bound in every run. If it does, the
+hydration term is doing no work and the comparison rests on excluded volume
+and shape alone.
+""")
 
-There is also no experimental curve for E35Q in SASBDB, so there is nothing to
-validate the mutant prediction against. Simulating a variant is easy; knowing
-whether the prediction is right is not.
-
+    extra = "\n".join(f"- {c}" for c in s.extra_caveats)
+    md(f"""
 ## 8. What this does and does not establish
 
 **Supported by the run above**
@@ -749,44 +967,54 @@ whether the prediction is right is not.
 - the fetch-and-join layer resolves a molecule to a curve, a structure and shifts
 - the SAXS calculator reproduces an experimental curve from coordinates, and
   recovers the deposited Guinier Rg from the raw data independently
-- the model's P(r) agrees with GNOM's in both Rg and extent
-- the NMR comparison carries real information (MCC ~0.44 on the crystal
-  structure), and beats a majority-class baseline
-- the pipeline runs on a variant, with a control that shows what size of
+- the model's P(r) can be compared with GNOM's in both Rg and extent
+- the pipeline runs on a variant, with replicates that show what size of
   difference would be meaningful
 
 **Not supported**
 
-- any claim about force field accuracy. Implicit solvent biases compaction, and
-  `c1`/`c2` absorb part of the remaining discrepancy.
+- any claim about force field accuracy. Implicit solvent carries a known bias,
+  and `c1`/`c2` absorb part of the remaining discrepancy.
 - anything in the wide-angle regime, which is out of scope for this project.
-- any statement about a mutant. There is no experimental curve for E35Q to
-  check against, and the predicted difference is within run-to-run noise.
+- any statement about the mutant. There is no experimental curve for
+  {s.mutation_label} to check against, and the predicted difference is within
+  run-to-run noise.
 - any claim that MD reproduces secondary structure *better or worse* than the
-  crystal structure does. The two score the same, so this comparison cannot
-  separate them — it bounds the method, not the simulation.
+  crystal structure does, unless the two scored differently by more than the
+  scatter.
 - the formal error on the Guinier Rg as an uncertainty. It is the covariance of
   a straight line, roughly ten times smaller than the honest figure.
+{extra}
 
-**The headline negative result**
+**Comparing across systems**
 
-Short implicit-solvent MD makes agreement with SAXS *worse*, not better: the
-crystal structure alone fits better than the ensemble derived from it. The
-harness was built to detect that kind of disagreement, so reporting it is the
-point rather than an embarrassment. See the README's Status section.
+The same analysis runs on every reference system in `notebooks/`. A conclusion
+that holds for one molecule and not another is a property of that molecule; one
+that holds for all of them is a property of the method. Neither is visible from
+a single notebook, which is why there is more than one.
 """)
 
-nb = {
-    "cells": cells,
-    "metadata": {
-        "kernelspec": {"display_name": "Python (saxsnmr)", "language": "python",
-                       "name": "saxsnmr"},
-        "language_info": {"name": "python", "version": "3.11"},
-    },
-    "nbformat": 4,
-    "nbformat_minor": 5,
-}
+    return nb
 
-out = REPO / "notebooks" / "02_phase1_lysozyme.ipynb"
-out.write_text(json.dumps(nb, indent=1), encoding="utf-8")
-print("wrote", out, f"({len(cells)} cells)")
+
+def main(argv):
+    wanted = {a.lower().replace("-", "_").replace(" ", "_") for a in argv[1:]}
+
+    def matches(s: System) -> bool:
+        if not wanted:
+            return True
+        keys = {s.slug, s.slug.replace("phase1_", ""), s.index,
+                s.short.lower().replace(" ", "_"), s.uniprot.lower()}
+        return bool(wanted & keys)
+
+    chosen = [s for s in SYSTEMS if matches(s)]
+    if wanted and not chosen:
+        names = ", ".join(s.slug.replace("phase1_", "") for s in SYSTEMS)
+        raise SystemExit(f"no system matched {sorted(wanted)}; try one of: {names}")
+    for s in chosen:
+        out, n = build(s).write()
+        print(f"wrote {out.name} ({n} cells)  [{s.short}]")
+
+
+if __name__ == "__main__":
+    main(sys.argv)

@@ -5,9 +5,19 @@ chemical shifts for a protein of interest, runs short implicit-solvent molecular
 from a matched structure, and reports how well the simulated observables reproduce the
 measured ones.
 
+Each notebook performs three tasks on one molecule:
+
+1. **Short implicit-solvent MD**, producing an ensemble whose structural parameters can be
+   compared against what a wet-lab instrument measures.
+2. **Computational SAXS** — I(q) from coordinates, Guinier Rg, Kratky, and the distance
+   distribution P(r) — checked against the deposited SASBDB curve and its GNOM transform.
+3. **Computational NMR** — secondary chemical shifts converted to a per-residue secondary
+   structure assignment, checked against BMRB, against the crystal structure, and against
+   a no-information baseline.
+
 This is a **validation harness**: it tests whether a given structure, force field and
 workflow reproduce published experimental data. It is not a structure-determination or
-structure-prediction tool.
+structure-prediction tool. Its most useful output is a disagreement it can attribute.
 
 ## Scope
 
@@ -126,6 +136,22 @@ measured. `guinier()` extends the window until the fitted Rg puts the last point
 limit, and flags a curve where no window qualifies rather than returning a number. Run
 against `SASDMJ4` it reports `[INVALID]` instead of a confident Rg of 303 Å.
 
+**The wanted chain is often not the first in the file.** `TER` and `SSBOND` records carry
+their own chain identifiers, and filtering atoms without filtering those leaves a `TER`
+for a discarded chain sitting before the first retained atom. OpenMM's PDB reader then
+dies with `'NoneType' object has no attribute '_current_chain'`, which says nothing about
+chains. This never fired on the reference structure, where the wanted chain happens to
+come first — it only appeared when a second system needed chain `B`. A dangling `SSBOND`
+to a removed chain is the same class of problem and is dropped too.
+
+**GNOM writes P(r) in whatever length unit matches the input q.** A curve deposited in
+1/nm has its r axis in nm, and the file carries no unit label. Assuming Ångström turns a
+46 Å Dmax into 4.6 Å — small enough to look like a different molecule rather than an
+obvious error. `Fetcher.pddf` converts using the same declared `angular_unit` the curve
+uses, then **cross-checks the result against the entry's own reported Dmax and refuses
+rather than guessing** if they disagree. One sampled entry fails that check, which is the
+correct outcome: its deposited file and its metadata genuinely disagree.
+
 **Caching text on Windows corrupted it.** Downloads already carry CRLF, and writing them
 with `Path.write_text` translated the LF again, producing a blank line between every real
 one when read back. Parsers that skip blanks survived; the GNOM P(r) parser, which treats
@@ -155,15 +181,43 @@ the limit, a null result cannot be distinguished from an underpowered test.
 structures, and Rg is precisely what SAXS is most sensitive to. Treat χ² from
 implicit-solvent runs as a workflow check, not a force-field verdict.
 
-## Reference system
+## Reference systems
 
-Lysozyme (UniProt **P00698**) is the development and regression target:
+Three molecules run the identical analysis. A conclusion that holds for one and not the
+others is a property of that molecule; one that holds for all three is a property of the
+method. Neither is visible from a single notebook.
 
-- 26 SASBDB entries matching "lysozyme", with 14 confirmed mapped to P00698
-- 39 BMRB entries carrying assigned chemical shifts
-- PDB **2vb1** at 0.65 Å resolution
+| | UniProt | SASBDB | structure | residues | crystal χ² | BMRB |
+|---|---|---|---|---|---|---|
+| **lysozyme** (hen egg white) | P00698 | SASDMJ2 | 2vb1, 0.65 Å | 129 | 1.66 | 39 |
+| **RNase A** (bovine pancreatic) | P61823 | SASDPF7 | 6etk, 0.85 Å | 124 | 2.30 | 17 |
+| **cytochrome c** (equine heart) | P00004 | SASDAB2 | 3jbt | 104 | 1.14 | 48 |
 
-If the harness cannot reproduce lysozyme, nothing else it reports is trustworthy.
+Lysozyme is the development and regression target: if the harness cannot reproduce
+lysozyme, nothing else it reports is trustworthy. RNase A is the closest available
+analogue — small, rigid, sub-Ångström structure — and exists to test whether the lysozyme
+result is a property of lysozyme or of the method. Cytochrome c is a different fold class
+and **carries a heme the force field cannot represent**, which makes it the most honest of
+the three about what this pipeline cannot do.
+
+### Finding these was harder than the 31% overlap suggests
+
+Most obvious candidates fail, and they fail quietly:
+
+- **α-synuclein** and **calmodulin**: dozens of SASBDB hits, but *zero* map to the
+  accession. The join silently returns nothing.
+- **Ubiquitin**: abundant data, but most entries are poly-ubiquitin chains — Rg 42–54 Å,
+  Dmax 188–238 Å against a 12 Å monomer. The one monomeric entry found has no BMRB shifts.
+- **SH3 domain**: the SIFTS "best structure" for the accession is a 318-residue complex,
+  not the 62-residue domain. The crystal fit gives χ² ≈ 1000, which is the diagnostic
+  working.
+- **BPTI**: the deposited construct is 100 residues; the best structure resolves 41.
+- Any **heme or metal protein**: `prepare` strips heterogens and amber14 has no parameters
+  for them, so the simulation is silently of the apo chain.
+
+Candidates were screened by running the whole chain — curve, Guinier, structure,
+preparation, crystal fit — and keeping only what survived. A candidate that merely has
+"SAXS data and NMR data" is not a candidate.
 
 ## Layout
 
@@ -172,14 +226,30 @@ saxsnmr/fetch.py   SASBDB, UniProt, PDBe/SIFTS, AlphaFold, BMRB, GNOM P(r)
 saxsnmr/saxs.py    I(q) from coordinates, Guinier, P(r), chi-squared fitting
 saxsnmr/md.py      PDB sanitising, structure prep, implicit-solvent MD
 saxsnmr/nmr.py     secondary chemical shifts and comparison to DSSP
-tools/make_notebook.py               generates the notebook; edit this, not the .ipynb
-notebooks/02_phase1_lysozyme.ipynb   the pipeline end to end
+tools/make_notebook.py                    generates the notebooks; edit this, not the .ipynb
+notebooks/02_phase1_lysozyme.ipynb        reference system
+notebooks/03_phase1_rnase_a.ipynb         same analysis, rigid analogue
+notebooks/04_phase1_cytochrome_c.ipynb    same analysis, different fold + cofactor
 ```
 
-The notebook is **build output**. Editing cells in Jupyter works for a quick experiment,
-but `python tools/make_notebook.py` overwrites it, so anything worth keeping belongs in
-the generator. Hand-editing `.ipynb` JSON is error-prone and its diffs are unreadable,
-which is the whole reason for generating it.
+The notebooks are **build output**. Editing cells in Jupyter works for a quick experiment,
+but the generator overwrites them, so anything worth keeping belongs in the generator.
+Hand-editing `.ipynb` JSON is error-prone and its diffs are unreadable, which is the whole
+reason for generating it.
+
+```
+python tools/make_notebook.py             # all systems
+python tools/make_notebook.py rnase_a     # just one
+```
+
+**All three notebooks come from one `System` config each.** Only the molecule, the
+accessions and the system-specific commentary differ — the analysis is literally the same
+code. A harness that needed per-protein special-casing would not be a harness, so where a
+system has its own trap (a cofactor, a chain that is not first in the file) it is named in
+that system's config rather than worked around silently.
+
+Adding a fourth system means adding one `System` entry. Screen it end to end first; see
+the reference-systems section for how many plausible candidates do not survive that.
 
 ## Install
 
@@ -239,32 +309,121 @@ package, confirm the environment is active.
 
 ## Status
 
-The pipeline runs end to end — all 20 code cells of `02_phase1_lysozyme.ipynb` in one
-pass. Measured on lysozyme (`2vb1` against SASBDB `SASDMJ2`):
+The pipeline runs end to end on all three reference systems, every code cell in one pass.
+The detailed results below are for lysozyme (`2vb1` against SASBDB `SASDMJ2`), the
+development target; the cross-system comparison follows.
 
 | Model | reduced χ² | Rg (Guinier / P(r)) | Dmax from P(r) |
 |---|---|---|---|
 | experiment | — | 13.98 ± 0.26 deposited, **14.07 recomputed** / 14.06 | 41.9 Å |
-| crystal structure `2vb1` | **1.66** | 14.00 / 13.90 | 42.1 Å |
-| implicit-solvent MD ensemble | **19.9 ± 1.5** (n=3) | 14.34 – 14.39 / 14.36 | 43.4 Å |
+| crystal structure `2vb1` | **1.67** | 14.00 / 13.91 | 42.1 Å |
+| implicit-solvent MD ensemble | **19.3** | 14.36 / 14.31 | 43.6 Å |
 
-### The data checks out; the simulation does not
+### Across the three systems — the lysozyme result does not generalise
+
+This is the finding that adding two more molecules produced, and it overturns what an
+earlier version of this README claimed as a general conclusion.
+
+| | experiment Rg | crystal Rg | MD Rg | crystal χ² | MD χ² |
+|---|---|---|---|---|---|
+| lysozyme | 14.06 Å | 13.91 | 14.31 | **1.67** | **19.3** |
+| RNase A | 14.92 Å | 14.29 | **14.78** | **2.31** | **1.31** |
+| cytochrome c | 13.00 Å | 12.85 | 13.24 | **1.14** | **1.44** |
+
+(Rg from P(r), so no fitted parameter is involved.)
+
+**For RNase A, implicit-solvent MD makes the fit better**, not worse — χ² 2.31 → 1.31. For
+cytochrome c it is mildly worse. Only for lysozyme does it degrade badly. "Short
+implicit-solvent MD makes SAXS agreement worse" was a statement about lysozyme that got
+written up as a statement about the method.
+
+**One mechanism explains all three.** GB implicit solvent expands the protein by about
+0.4 Å in Rg — +0.40, +0.49, +0.39 for the three systems, which is strikingly consistent.
+Whether that helps depends entirely on how far the crystal structure starts *below* the
+solution value:
+
+- RNase A's crystal is **0.63 Å too compact**, so the expansion moves it from 14.29 to
+  14.78 against an experimental 14.92. The improvement is real but partly luck — the bias
+  happened to point the right way and be roughly the right size.
+- lysozyme's and cytochrome c's crystals are both only 0.15 Å too compact, so the same
+  expansion overshoots and makes them worse.
+
+The expansion is a consistent property of the solvent model. The *benefit* is a property
+of the starting structure, which is why it cannot be generalised from one protein.
+
+### χ² is not comparable between systems
+
+| | points | median σ/I |
+|---|---|---|
+| lysozyme `SASDMJ2` | 147 | **0.0085** |
+| RNase A `SASDPF7` | 1789 | 0.108 |
+| cytochrome c `SASDAB2` | 1760 | 0.247 |
+
+Lysozyme's deposited uncertainties are **13–29× tighter** than the others'. Since χ²
+scales as 1/σ², the same relative model error costs lysozyme roughly 170× more χ² than
+RNase A and 840× more than cytochrome c.
+
+So lysozyme's χ² of 19.3 does **not** mean its model is thirteen times worse than
+cytochrome c's at 1.44. It means lysozyme's measurement is far more precise, and the
+harness is being held to a correspondingly higher standard. Rg in Ångström is the
+quantity to compare across systems; χ² is only meaningful *within* one.
+
+This also reframes the lysozyme result: a 0.25 Å overshoot in Rg, amplified by unusually
+tight error bars, is what produced the dramatic-looking χ² of 19.3.
+
+### How many replicates are enough? Not three, for lysozyme
+
+The mutation test was run as three independent triplicates on lysozyme over the course of
+this work. The verdicts were not stable:
+
+| triplicate | wild-type χ² | difference | detection limit | printed verdict |
+|---|---|---|---|---|
+| 1 | 19.94 ± 1.54 | +0.41 | 3.57 | not resolvable |
+| 2 | 18.43 ± 0.75 | +1.78 | 1.23 | **exceeds threshold** |
+| 3 | 23.81 ± 5.63 | −3.73 | 7.73 | not resolvable |
+
+The estimated scatter itself varies from 0.75 to 5.63 — a factor of seven. Two of three
+triplicates say not resolvable and one says otherwise, which is what an underpowered test
+looks like: the single positive verdict is consistent with chance, and should not be read
+as an effect.
+
+**n=3 is adequate for RNase A and cytochrome c and not for lysozyme**, because lysozyme's
+tight error bars make its χ² both larger and more volatile. The notebook's wording handles
+this correctly — when a difference exceeds the limit it says that is "a reason to run more
+replicas, not a result" — but the honest summary is that this comparison needs more
+replicates than the notebook runs by default.
+
+Final run, all three systems:
+
+| | wild type χ² | mutant χ² | difference | resolvable below | verdict |
+|---|---|---|---|---|---|
+| lysozyme | 23.81 ± 5.63 | 20.08 ± 3.63 (E35Q) | −3.73 | 7.73 | not resolvable |
+| RNase A | 1.43 ± 0.14 | 1.41 ± 0.14 (H12A) | −0.02 | 0.22 | not resolvable |
+| cytochrome c | 1.46 ± 0.16 | 1.35 ± 0.05 (M80A) | −0.11 | 0.20 | not resolvable |
+
+All three mutations are chemically drastic and structurally conservative, and none is
+resolvable. That is the expected and correct outcome.
+
+### The data checks out; the simulation does not (lysozyme)
 
 Recomputing the Guinier Rg from the raw curve gives 14.07 Å against the deposited
 13.98 ± 0.26 Å — 0.4σ, over a self-selected window of 64 points spanning qRg 0.11–1.29.
 The P(r) transform independently gives 14.06 Å. The experimental side of the comparison
 is sound, so disagreement is the model's.
 
-**Short implicit-solvent MD makes agreement with SAXS substantially worse, not better.**
-The simulation expands the protein away from a crystal structure that already matched
-experiment, and SAXS is most sensitive to exactly that. The expansion appears within the
-first 2 ps and is unchanged across nonbonded cutoffs of 2.0, 1.5, 1.2 and 1.0 nm, so it is
-a systematic bias of the GB solvent model rather than a settings artifact. The fitted
-hydration parameter `c2` falls to its lower bound, consistent with a model that is already
-too large.
+**For lysozyme specifically, short implicit-solvent MD makes agreement with SAXS
+substantially worse.** The simulation expands the protein away from a crystal structure
+that already matched experiment, and SAXS is most sensitive to exactly that. The expansion
+appears within the first 2 ps and is unchanged across nonbonded cutoffs of 2.0, 1.5, 1.2
+and 1.0 nm — and unchanged when the missing Debye screening is supplied (see below) — so it
+is a property of the solvent model rather than a settings artifact. The fitted hydration
+parameter `c2` falls to its lower bound, consistent with a model that is already too large.
+
+See the cross-system section above before reading this as a general result: the same
+expansion *improves* RNase A.
 
 The P(r) comparison confirms this in real space, where no scale factor, `c1` or `c2` is
-free to absorb anything: the MD ensemble reaches **43.4 Å** against an experimental Dmax
+free to absorb anything: the MD ensemble reaches **43.6 Å** against an experimental Dmax
 of 41.9 Å, while the crystal structure sits at 42.1 Å. The disagreement is not an artifact
 of reciprocal-space fitting.
 
@@ -276,41 +435,54 @@ That is a real result, not a bug: the harness was built to detect this kind of
 disagreement, and reporting it is the point. It does mean implicit solvent cannot support
 a claim about force-field accuracy against SAXS.
 
-### How large a χ² difference means anything
+### Ionic strength: a real configuration error that is *not* the cause
 
-Three wild-type replicates, identical but for the random seed, give χ² = **19.94 ± 1.54**.
-A 5 ps ensemble is not converged; it is long enough to show the systematic expansion,
-which is several times this scatter, and not much else.
+`run_md` leaves Debye screening at OpenMM's default, which is **zero** — the simulation has
+completely unscreened intramolecular electrostatics on a protein carrying net +8 e, while
+`SASDMJ2` was measured in 150 mM NaCl at pH 3.8. That is a genuine mismatch with the
+experiment and it was worth testing as an explanation.
 
-**An earlier version of this section got this wrong, in a way worth recording.** It
-estimated the scatter from *two* runs and reported a "noise floor" of 3.8. Re-running the
-identical code gave 1.75 for the same quantity — and the mutation comparison built on top
-of it flipped from "within noise" to "worth investigating" between consecutive executions.
-A control made of one run versus one run estimates nothing; it converts whichever answer
-the seeds happened to give into something that reads like evidence.
+It is not the explanation. Two seeds per condition:
 
-The notebook now runs three replicates per group and reports the detection limit:
+| condition | Rg | net charge |
+|---|---|---|
+| experiment | **14.07 Å** | — |
+| pH 7.0, 0 mM (the default) | 14.40 | +8 |
+| pH 7.0, 150 mM screening | 14.34 | +8 |
+| pH 3.8, 150 mM (matches the experiment) | **14.48** | +18 |
 
-```
-wild type chi2 :  19.94 +/- 1.54  (n=3)
-E35Q      chi2 :  20.35 +/- 2.68  (n=3)
-difference     :  +0.41   (+0.19 pooled SD)
-smallest difference these replicas could resolve (~2 SE) : 3.57
-Not resolvable.
-```
+Supplying the screening moves Rg by 0.03 Å against a replicate scatter of ±0.025 — about
+one standard deviation, so not a resolved effect. Matching the experimental pH makes
+agreement *worse*, because lysozyme carries +18 e at pH 3.8. A model that fails harder as
+the setup becomes more faithful is failing for physical reasons.
 
-The difference is 0.41, against the 5.92 the two-run version reported for the same
-comparison. E35Q is the catalytic general acid — a charge change with almost no shape
-change — so "not resolvable" is the expected and correct answer.
+Two API notes, since this was harder to find than it should be: `implicitSolventSaltConc`
+is **not** accepted on the `ForceField` path — it raises "specified but never used", which
+reads like a typo rather than a wrong code path. `implicitSolventKappa` is the one that
+works, and passing 0 reproduces the unset energy exactly, confirming the default really is
+no screening.
 
-Note the detection limit. **"No significant difference" is uninformative without it**,
-because a null result and an underpowered test look identical. These replicates could not
-have found anything smaller than ~3.6 in χ², so this result bounds the effect rather than
-excluding it.
+### How the replicate control came to exist
 
-There is also no experimental curve for E35Q in SASBDB, so there would be nothing to check
-a prediction against even if one could be resolved. Simulating a variant is easy; knowing
-whether the prediction is right is not.
+Worth recording, because the failure was subtle and the fix was not obvious.
+
+The first version estimated the scatter from **two** runs and reported a "noise floor" of
+3.8. Re-running the identical code gave 1.75 for the same quantity — and the mutation
+comparison built on top of it flipped from "within noise" to "worth investigating" between
+consecutive executions. A control made of one run versus one run estimates nothing; it
+converts whichever answer the seeds happened to give into something that reads like
+evidence, in a section whose entire purpose was to prevent that.
+
+Replicates and a stated detection limit replaced it. **"No significant difference" is
+uninformative without the limit**, because a null result and an underpowered test look
+identical; the limit turns a null into a bound on the effect rather than a claim about it.
+
+The three-triplicate table above is what that machinery then revealed about its own
+adequacy — which a single run would never have shown.
+
+There is also no experimental curve for any of these mutants in SASBDB, so there would be
+nothing to check a prediction against even if one could be resolved. Simulating a variant
+is easy; knowing whether the prediction is right is not.
 
 ### NMR: what a control revealed
 
@@ -359,6 +531,36 @@ correct structure. Without the crystal control that looked like a simulation def
 `compare_to_dssp` now returns `mcc`, `baseline_agreement`, `balanced_accuracy` and a
 confusion matrix, and `ShiftComparison.__repr__` flags a result that fails to beat its own
 baseline.
+
+### A third defect: the BMRB entry has to be chosen, not taken
+
+Running the analysis on two more proteins exposed one more problem. Selecting "the first
+BMRB entry with more than 50 CA shifts" picked, for RNase A, an entry whose secondary
+shifts have a standard deviation of **0.59 ppm** where five other entries for the same
+protein give 3.6–5.0 ppm. An entry with no dispersion is not reporting conformation — it
+may be a denatured or dynamically averaged sample, or shifts that already had a reference
+subtracted before deposition.
+
+The consequence was an MCC of **0.009**: no information at all. The controls caught it
+(agreement 44% against a 98% majority baseline), which is exactly what they are for, but
+the selection should not have offered it in the first place.
+
+Entries are now screened on `shift_dispersion` and the **most dispersed** usable one is
+taken. Both criteria look only at the NMR data; screening on agreement with the structure
+would be fitting to the answer. The notebooks print the full candidate table with the
+rejected entries visible.
+
+The result is consistent across all three systems, which it was not before:
+
+| | BMRB | MCC | agreement | baseline |
+|---|---|---|---|---|
+| lysozyme | 4562 | 0.440 | 63.8% | 47.2% |
+| RNase A | 4031 | **0.401** (0.009 before) | 60.5% | 37.1% |
+| cytochrome c | 17847 | **0.391** (0.242 before) | 63.5% | 46.2% |
+
+An MCC near 0.4 is modest but real, and it is the ceiling this method reaches on a
+correct structure. The MD ensembles score within ~0.02 of their crystal structures in
+every case, so this comparison bounds the method and cannot separate the models.
 
 ### MD throughput
 

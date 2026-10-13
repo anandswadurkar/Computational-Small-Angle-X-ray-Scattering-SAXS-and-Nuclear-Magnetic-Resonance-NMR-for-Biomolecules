@@ -72,7 +72,7 @@ from .md import (MDResult, PreparedStructure, benchmark, prepare, run_md,  # noq
                  sanitise_pdb)
 from .nmr import (ShiftComparison, best_offset, compare_to_dssp,  # noqa: E402
                   csi_assignment, matthews_corrcoef, secondary_shifts,
-                  threshold_scan)
+                  shift_dispersion, threshold_scan)
 from .saxs import (GuinierFit, SaxsFit, ScatteringTables, dmax_from_pr,  # noqa: E402
                    fit, guinier, pair_distribution, profile, rg_from_pr)
 
@@ -84,7 +84,7 @@ __all__ = [
     "ScatteringTables", "profile", "fit", "SaxsFit",
     "guinier", "GuinierFit", "pair_distribution", "rg_from_pr", "dmax_from_pr",
     "secondary_shifts", "csi_assignment", "compare_to_dssp", "best_offset",
-    "ShiftComparison", "matthews_corrcoef", "threshold_scan",
+    "ShiftComparison", "matthews_corrcoef", "threshold_scan", "shift_dispersion",
     "frame_tables", "ensemble_fit", "radius_of_gyration", "load_trajectory",
     "DLL_PATH_ADDED",
 ]

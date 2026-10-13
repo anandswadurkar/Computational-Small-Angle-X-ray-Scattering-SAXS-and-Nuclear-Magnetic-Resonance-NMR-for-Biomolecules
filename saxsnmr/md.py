@@ -48,11 +48,25 @@ def sanitise_pdb(pdb_path: str | Path, out_path: str | Path,
       (protein and solvent), so selecting a chain by identifier alone keeps both.
       Filtering here, on the text, is unambiguous.
 
+    * **Bookkeeping records belonging to discarded chains.** ``TER`` and
+      ``SSBOND`` carry their own chain identifiers and must be filtered too. A
+      ``TER`` for a chain that was dropped can land before the first retained
+      atom, and OpenMM's PDB reader then fails with
+      ``'NoneType' object has no attribute '_current_chain'`` -- a message that
+      says nothing about chains being the problem. This only shows up when the
+      wanted chain is not the first one in the file, which is why the reference
+      structure never exposed it.
+
     Returns a count of what was dropped so callers can report it.
     """
     src = Path(pdb_path).read_text(errors="replace").splitlines()
-    stats = {"kept": 0, "hydrogens": 0, "altloc": 0, "other_chain": 0}
+    stats = {"kept": 0, "hydrogens": 0, "altloc": 0, "other_chain": 0,
+             "other_chain_records": 0}
     out: list[str] = []
+    seen_atom = False
+
+    def chain_of(line: str, col: int) -> str | None:
+        return line[col] if len(line) > col else None
 
     for line in src:
         rec = line[:6]
@@ -71,7 +85,26 @@ def sanitise_pdb(pdb_path: str | Path, out_path: str | Path,
                 continue
             out.append(line[:16] + " " + line[17:])
             stats["kept"] += 1
-        elif rec.startswith(("TER", "END", "CRYST", "MODEL", "ENDMDL", "SSBOND")):
+            seen_atom = True
+        elif rec.startswith("TER"):
+            # A TER for a discarded chain, or one before any kept atom, breaks
+            # the reader rather than being ignored.
+            if not seen_atom:
+                stats["other_chain_records"] += 1
+                continue
+            if chain is not None and chain_of(line, 21) not in (None, chain):
+                stats["other_chain_records"] += 1
+                continue
+            out.append(line)
+        elif rec.startswith("SSBOND"):
+            # Columns 16 and 30 hold the two partner chains; a disulfide to a
+            # chain that is gone would be a dangling restraint.
+            if chain is not None and any(
+                    chain_of(line, c) not in (None, chain) for c in (15, 29)):
+                stats["other_chain_records"] += 1
+                continue
+            out.append(line)
+        elif rec.startswith(("END", "CRYST", "MODEL", "ENDMDL")):
             out.append(line)
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
