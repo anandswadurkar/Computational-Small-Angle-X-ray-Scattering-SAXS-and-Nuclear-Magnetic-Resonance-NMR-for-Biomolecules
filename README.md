@@ -341,7 +341,20 @@ CPU and Reference agree to 6e-06. A platform computing wrong forces still produc
 trajectory that looks plausible. Verify this on your own hardware before using any platform
 other than CPU.
 
-**A crashing kernel is usually the machine, not the code.** When the SANS notebook killed
+**Import `saxsnmr` before NumPy, SciPy, matplotlib, mdtraj or pandas.** This ordering is
+load-bearing. A Jupyter kernel launches `python.exe` directly, so the conda environment is
+never activated and `<env>\Libraryin` is absent from PATH; importing `saxsnmr` repairs
+that. Import NumPy first -- or matplotlib, which pulls NumPy in -- and the BLAS libraries
+bind before the repair runs, at which point the process aborts outright on the first cell:
+no exception, no traceback.
+
+This shipped in the SANS notebook and crashed a kernel. **Headless testing cannot catch
+it**, because `conda run -n saxsnmr` activates the environment and makes the repair a
+no-op; reproducing it requires invoking the environment's `python.exe` directly. The
+generator now refuses to write a notebook whose first scientific import precedes
+`saxsnmr`, and cell 1 of every notebook is tested under an unactivated interpreter.
+
+**A crashing kernel is otherwise usually the machine, not the code.** When the SANS notebook killed
 a kernel, measurement showed it peaks at 190 MB — the largest structure in it, 8,124 atoms,
 costs 6 MB to prepare — while the machine had 1.5 GB free of 15.8 GB with the editor at
 3.5 GB and a browser at 4.1 GB across 68 processes. Every operation suspected (`nnls` on

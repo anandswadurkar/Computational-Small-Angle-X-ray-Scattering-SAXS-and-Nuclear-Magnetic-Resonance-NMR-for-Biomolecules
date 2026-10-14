@@ -207,6 +207,46 @@ class Notebook:
             "source": self._fill(text).strip("\n").splitlines(keepends=True)})
 
     def write(self):
+        # saxsnmr must be imported before numpy or matplotlib, in the notebook
+        # as a whole. A Jupyter kernel runs without the conda environment
+        # activated, so importing saxsnmr is what puts <env>\Library\bin on
+        # PATH; bind BLAS before that and the process aborts with no traceback
+        # on the first cell. This shipped once, and headless testing cannot
+        # catch it because `conda run` activates the environment and makes the
+        # repair a no-op.
+        # Order is (cell index, line index within that cell). Comparing the
+        # line text instead would order two imports in the same cell
+        # alphabetically, which is meaningless and wrong -- the first version
+        # of this check did exactly that and reported a false positive.
+        first_sci, first_saxsnmr = None, None
+        for n, cell in enumerate(self.cells, 1):
+            if cell["cell_type"] != "code":
+                continue
+            for ln, line in enumerate(cell["source"]):
+                stripped = line.strip()
+                if not stripped.startswith(("import ", "from ")):
+                    continue
+                where = (n, ln)
+                if first_saxsnmr is None and "saxsnmr" in stripped:
+                    first_saxsnmr = (where, stripped)
+                if first_sci is None and any(
+                        stripped.startswith(p) for p in
+                        ("import numpy", "import matplotlib", "from numpy",
+                         "from matplotlib", "import scipy", "from scipy",
+                         "import mdtraj", "from mdtraj", "import pandas")):
+                    first_sci = (where, stripped)
+        if first_sci and (first_saxsnmr is None
+                          or first_sci[0] < first_saxsnmr[0]):
+            raise RuntimeError(
+                f"{self.s.filename}: {first_sci[1]!r} (cell {first_sci[0][0]}, "
+                f"line {first_sci[0][1] + 1}) comes before importing saxsnmr"
+                + (f" ({first_saxsnmr[1]!r}, cell {first_saxsnmr[0][0]}, "
+                   f"line {first_saxsnmr[0][1] + 1})"
+                   if first_saxsnmr else " (never imported)")
+                + ".\nsaxsnmr repairs PATH for the conda environment's "
+                  "compiled libraries. Importing NumPy first binds BLAS "
+                  "before the repair and the kernel dies with no traceback.")
+
         # Compile every code cell before writing. The cell sources are built
         # by string substitution into templates, and a mangled escape yields
         # a notebook that looks fine until someone runs it -- which has
@@ -1166,15 +1206,30 @@ tunable. Both facts drive everything below.
 import sys
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-import numpy as np
-
+# ---------------------------------------------------------------------------
+# saxsnmr MUST be imported before numpy or matplotlib. This ordering is
+# load-bearing, not style.
+#
+# A Jupyter kernel launches python.exe directly, so the conda environment is
+# never activated and <env>\\Library\\bin is absent from PATH. Importing
+# saxsnmr repairs that. Import numpy first -- or matplotlib, which pulls in
+# numpy -- and the BLAS libraries bind before the repair runs, at which point
+# the process aborts outright: no exception, no traceback, just "the kernel
+# crashed" on the first cell.
+#
+# An earlier version of this notebook had matplotlib and numpy on these lines
+# and crashed exactly that way. It was invisible to headless testing, because
+# `conda run -n saxsnmr` activates the environment and the repair is then a
+# no-op.
+# ---------------------------------------------------------------------------
 sys.path.insert(0, str(Path.cwd().parent))
 import saxsnmr
 
-# See the note in the other notebooks: a kernel that imported saxsnmr before
-# sans.py existed keeps the old module object, and the neutron names are
-# simply absent.
+import matplotlib.pyplot as plt
+import numpy as np
+
+# A kernel that imported saxsnmr before sans.py existed keeps the old module
+# object, and the neutron names are simply absent.
 if not hasattr(saxsnmr, "sans_tables"):
     raise ImportError(
         "the imported saxsnmr predates the neutron module. Restart the "
