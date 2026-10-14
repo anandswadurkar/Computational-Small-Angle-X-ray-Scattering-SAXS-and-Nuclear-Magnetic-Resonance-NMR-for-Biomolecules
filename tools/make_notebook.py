@@ -25,6 +25,43 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 
+# Shared by every notebook. Kept in one place because the two builders
+# drifting apart is precisely what produced a kernel crash: the SANS
+# notebook was written with its own import cell that put NumPy first.
+BEFORE_YOU_RUN = """
+## Before you run this
+
+**1. Use a kernel from the `saxsnmr` environment.** On Windows, conda keeps its
+compiled libraries in `<env>\\Library\\bin`, which only joins the search path
+when the environment is activated. A Jupyter kernel launches `python.exe`
+directly, so it normally misses them, and the first call into NumPy's linear
+algebra then kills the kernel with no exception and no traceback — reported
+only as *"the kernel crashed"*.
+
+**2. `saxsnmr` must be imported before NumPy, SciPy, matplotlib, mdtraj or
+pandas.** Importing it is what repairs PATH. Import NumPy first — or
+matplotlib, which pulls NumPy in — and the compiled libraries bind against an
+incomplete PATH before the repair runs, and the kernel dies on the first cell.
+
+This ordering is load-bearing, not style. It is checked when these notebooks
+are generated, and the first cell verifies the result. If you add imports to
+the first cell, keep `import saxsnmr` above them.
+
+**3. If you edit the package while a kernel is running, restart it.** Python
+caches imported modules, so new names stay invisible and show up much later as
+a confusing `ImportError`. To reload without losing your variables:
+
+```python
+import sys
+for m in [k for k in sys.modules if k == "saxsnmr" or k.startswith("saxsnmr.")]:
+    del sys.modules[m]
+```
+
+Purge the whole package, not just the top level — `importlib.reload` leaves the
+submodules cached and mixes versions, which fails more confusingly than before.
+"""
+
+
 @dataclass
 class System:
     """One reference molecule and everything that differs because of it."""
@@ -308,18 +345,7 @@ only want to see the pipeline work — but read what that section says about why
 one run per group is not a control before trusting any number it then prints.
 """)
 
-    md("""
-> **Use a kernel from the `saxsnmr` environment.**
->
-> On Windows, conda keeps its compiled libraries in `<env>\\Library\\bin`, which only
-> joins the search path when the environment is activated. A Jupyter kernel launches
-> `python.exe` directly, so it normally misses them, and the first call into NumPy's
-> linear algebra then kills the kernel with no exception and no traceback — reported
-> only as *"the kernel crashed"*.
->
-> Importing `saxsnmr` repairs PATH itself, so the notebook works whichever way the
-> kernel was started. That is why the cell below imports it before anything else.
-""")
+    md(BEFORE_YOU_RUN)
 
     code("""
 # Environment check. Run this first.
@@ -1200,7 +1226,12 @@ differs is hydrogen:
 
 Nothing in X-ray scattering behaves like a negative scatterer, and nothing is
 tunable. Both facts drive everything below.
+
+Unlike the other notebooks this one runs no simulations, so it finishes in
+**about a minute**.
 """)
+
+    md(BEFORE_YOU_RUN)
 
     code("""
 import sys

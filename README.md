@@ -258,20 +258,34 @@ python tools/make_notebook.py rnase_a     # just one system
 python tools/make_notebook.py sans        # just the SANS validation
 ```
 
-**All three notebooks come from one `System` config each.** Only the molecule, the
-accessions and the system-specific commentary differ — the analysis is literally the same
-code. A harness that needed per-protein special-casing would not be a harness, so where a
-system has its own trap (a cofactor, a chain that is not first in the file) it is named in
-that system's config rather than worked around silently.
+**The three molecule notebooks come from one `System` config each.** Only the molecule,
+the accessions and the system-specific commentary differ — the analysis is literally the
+same code. A harness that needed per-protein special-casing would not be a harness, so
+where a system has its own trap (a cofactor, a chain that is not first in the file) it is
+named in that system's config rather than worked around silently. The fourth notebook
+validates the neutron calculator and is not a `System`, since it tests code rather than
+analysing a molecule.
 
-Adding a fourth system means adding one `System` entry. Screen it end to end first; see
+Adding another system means adding one `System` entry. Screen it end to end first; see
 the reference-systems section for how many plausible candidates do not survive that.
 
-**The generator compiles every code cell before writing.** Cell sources are built by
-string substitution into templates, and a mangled escape produces a notebook that looks
-correct until someone runs it — which happened, and shipped a `SyntaxError` into the first
-cell of a notebook. Failing at generation costs a second; failing in a notebook costs
-however long it took to reach that cell.
+### The generator refuses to write a broken notebook
+
+Three checks run before any file is written. Each exists because the corresponding bug
+shipped.
+
+**Every code cell must compile.** Cell sources are built by string substitution into
+templates, and a mangled escape produces a notebook that looks correct until someone runs
+it — which happened, and put a `SyntaxError` in the first cell. Failing at generation
+costs a second; failing in a notebook costs however long it took to reach that cell.
+
+**`saxsnmr` must be imported before NumPy, SciPy, matplotlib, mdtraj or pandas.** The
+generator names the offending line and refuses. See the Platform notes for why this
+ordering is load-bearing; it crashed a kernel, and headless testing cannot detect it.
+
+**The shared "Before you run this" note is emitted from one place** for all four
+notebooks. The two builders drifting apart is exactly what produced the import-order bug:
+the SANS notebook had been written with its own import cell that put NumPy first.
 
 **The notebooks check that the imported `saxsnmr` is current.** A Jupyter kernel that
 imported the package before it was last edited keeps the old module object, and new names
@@ -376,9 +390,47 @@ package, confirm the environment is active.
 
 ## Status
 
-The pipeline runs end to end on all three reference systems, every code cell in one pass.
-The detailed results below are for lysozyme (`2vb1` against SASBDB `SASDMJ2`), the
-development target; the cross-system comparison follows.
+All four notebooks run end to end, every code cell in one pass. The sections below are
+long because this project records what it got wrong; the summary is here.
+
+### At a glance
+
+| | status |
+|---|---|
+| **fetch and join** | works — SASBDB, PDBe/SIFTS, RCSB, AlphaFold, BMRB, GNOM P(r) |
+| **SAXS calculator** | validated: recovers deposited Guinier Rg to 0.01–0.09 Å on three systems |
+| **implicit-solvent MD** | expands Rg by ~0.4 Å consistently; whether that helps **depends on the system** |
+| **NMR comparison** | works, modest: MCC 0.39–0.44 against crystal structures, beating baseline |
+| **mutation screening** | runs; **cannot resolve** any of the three mutations tested |
+| **SANS calculator** | validated numerically; **no experimental protein fit** — see below |
+| **tests, LICENSE, CITATION.cff** | **missing** — see Known gaps |
+
+**The single most important result:** short implicit-solvent MD improves the SAXS fit for
+RNase A (χ² 2.31 → 1.31), is mildly worse for cytochrome c, and much worse for lysozyme
+(1.67 → 19.3). An earlier version of this README reported the lysozyme behaviour as a
+property of the method. It is not.
+
+**The most important caveat:** χ² is not comparable between these systems, because their
+deposited uncertainties differ by 13–29×. Compare Rg in Ångström across systems; compare
+χ² only within one.
+
+### Known gaps
+
+Measured against the ground rules in the parent `CLAUDE.md`:
+
+- **No `tests/`.** The validation lives in notebooks and in throwaway scripts. The
+  known-answer checks that exist (Guinier theorem, solvent SLDs, match point, lysozyme
+  regression at χ² 1.662) should be `pytest` cases so a refactor cannot break them quietly.
+- **No `LICENSE` or `CITATION.cff`.** Both are required by the ground rules; the licence
+  choice is the author's.
+- **No `pyproject.toml` or `pre-commit`.** `ruff` has never been run over this code.
+- **No convergence study for the MD.** 5 ps is demonstrably not converged — the replicate
+  scatter shows it — and no block averaging or autocorrelation-corrected error bars are
+  computed.
+
+### Lysozyme in detail
+
+Lysozyme (`2vb1` against SASBDB `SASDMJ2`) is the development target:
 
 | Model | reduced χ² | Rg (Guinier / P(r)) | Dmax from P(r) |
 |---|---|---|---|
