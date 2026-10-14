@@ -324,6 +324,11 @@ else:
 checks = {
     "numpy linalg":   "import numpy as np; np.linalg.lstsq(np.eye(3), np.ones(3), rcond=None)",
     "scipy optimize": "from scipy.optimize import least_squares; least_squares(lambda p: p - 3.0, [0.0])",
+    # nnls is a separate compiled entry point used by the SANS fit. Checking
+    # least_squares does not exercise it, and anything that aborts the
+    # process here would otherwise do so mid-notebook with no traceback.
+    "scipy nnls":     ("import numpy as np; from scipy.optimize import nnls; "
+                       "nnls(np.eye(3), np.ones(3))"),
     "mdtraj":         "import mdtraj",
     "openmm import":  "import openmm",
     "openmm runtime": ("import openmm as mm; s = mm.System(); s.addParticle(1.0); "
@@ -1181,7 +1186,15 @@ if not hasattr(saxsnmr, "sans_tables"):
         "then re-run this cell. Reloading only the top-level package leaves "
         "the submodules cached and mixes versions.")
 
+# The same compiled-library check the other notebooks run. scipy's nnls is
+# used by the SANS fit and is a separate entry point from least_squares.
+import numpy as _np
+from scipy.optimize import nnls as _nnls
+_np.linalg.lstsq(_np.eye(3), _np.ones(3), rcond=None)
+_nnls(_np.eye(3), _np.ones(3))
+
 print("python:", sys.executable)
+print("numpy linalg and scipy nnls both usable")
 if saxsnmr.DLL_PATH_ADDED:
     print("repaired PATH with", len(saxsnmr.DLL_PATH_ADDED), "library directories")
 

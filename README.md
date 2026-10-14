@@ -341,6 +341,21 @@ CPU and Reference agree to 6e-06. A platform computing wrong forces still produc
 trajectory that looks plausible. Verify this on your own hardware before using any platform
 other than CPU.
 
+**A crashing kernel is usually the machine, not the code.** When the SANS notebook killed
+a kernel, measurement showed it peaks at 190 MB — the largest structure in it, 8,124 atoms,
+costs 6 MB to prepare — while the machine had 1.5 GB free of 15.8 GB with the editor at
+3.5 GB and a browser at 4.1 GB across 68 processes. Every operation suspected (`nnls` on
+rank-deficient and all-zero inputs, `shrake_rupley` on the largest structure, a fit at the
+match point where conditioning is worst) survived in an activated process. Measure the
+notebook's footprint and the machine's free memory before suspecting the code; a long-lived
+kernel still holding a previous notebook's state is the usual culprit, and restarting it
+costs nothing.
+
+**Every compiled entry point the notebooks use is checked in cell 1.** `scipy.optimize.nnls`
+was missing from that check for a while: it is a separate compiled routine from
+`least_squares`, used by the SANS fit, and anything that aborts there would otherwise do so
+mid-notebook with no traceback.
+
 **Almost every "broken library" symptom on Windows traces back to activation.** NumPy's
 linear algebra, SciPy's optimisers and `mdtraj.load` all abort the process when the
 environment is not activated, and all work normally when it is. Before suspecting a
