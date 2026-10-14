@@ -343,7 +343,7 @@ other than CPU.
 
 **Import `saxsnmr` before NumPy, SciPy, matplotlib, mdtraj or pandas.** This ordering is
 load-bearing. A Jupyter kernel launches `python.exe` directly, so the conda environment is
-never activated and `<env>\Libraryin` is absent from PATH; importing `saxsnmr` repairs
+never activated and `<env>\Library\bin` is absent from PATH; importing `saxsnmr` repairs
 that. Import NumPy first -- or matplotlib, which pulls NumPy in -- and the BLAS libraries
 bind before the repair runs, at which point the process aborts outright on the first cell:
 no exception, no traceback.
