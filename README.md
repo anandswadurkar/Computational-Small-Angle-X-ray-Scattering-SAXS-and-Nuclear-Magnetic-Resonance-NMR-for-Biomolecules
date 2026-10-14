@@ -33,13 +33,19 @@ structure-prediction tool. Its most useful output is a disagreement it can attri
 - Optional point mutations as exploratory input to the same pipeline, run as replicates
   against a wild-type control so an effect can be told from seed noise, and reported with
   the smallest difference the replicates could actually resolve
+- Small-angle **neutron** scattering, as a forward model: scattering lengths, H/D exchange,
+  contrast variation and a non-negative incoherent background. Validated numerically but
+  **not** against an experimental protein curve — see the SANS section below for why that
+  is a property of the deposited data rather than of the code.
 
 **Explicitly out of scope**
 
 - Wide-angle scattering (WAXS). A uniform hydration shell is not valid near the water
   structure peak, and that regime needs explicit-solvent methods such as GROMACS-SWAXS
   or WAXSiS. Only ~3% of SASBDB entries reach q ≥ 1.0 Å⁻¹ anyway (see below).
-- Neutron scattering (SANS)
+- The **hydration shell in the neutron model**. The X-ray model fits a shell contrast;
+  the neutron one does not model it at all, which matters most near the contrast match
+  point where the shell is most of what remains.
 - Raw detector data, diffraction images, cryo-EM movies, or mass spectrometry
 
 ## Pipeline
@@ -60,6 +66,8 @@ molecule name
   → CSI vs DSSP                → secondary structure, against two controls:
                                  the crystal structure and a majority-class
                                  predictor
+  → neutron forward model      → contrast series and match point (prediction
+                                 only; see the SANS section)
 ```
 
 There is no shift predictor in that chain. SPARTA+, SHIFTX2 and UCBShift all lack a usable
@@ -187,11 +195,16 @@ Three molecules run the identical analysis. A conclusion that holds for one and 
 others is a property of that molecule; one that holds for all three is a property of the
 method. Neither is visible from a single notebook.
 
-| | UniProt | SASBDB | structure | residues | crystal χ² | BMRB |
-|---|---|---|---|---|---|---|
-| **lysozyme** (hen egg white) | P00698 | SASDMJ2 | 2vb1, 0.65 Å | 129 | 1.66 | 39 |
-| **RNase A** (bovine pancreatic) | P61823 | SASDPF7 | 6etk, 0.85 Å | 124 | 2.30 | 17 |
-| **cytochrome c** (equine heart) | P00004 | SASDAB2 | 3jbt | 104 | 1.14 | 48 |
+| | UniProt | SASBDB | structure | residues | crystal χ² | BMRB | D₂O match pt |
+|---|---|---|---|---|---|---|---|
+| **lysozyme** (hen egg white) | P00698 | SASDMJ2 | 2vb1, 0.65 Å | 129 | 1.67 | 39 | 46.8% |
+| **RNase A** (bovine pancreatic) | P61823 | SASDPF7 | 6etk, 0.85 Å | 124 | 2.31 | 17 | 45.9% |
+| **cytochrome c** (equine heart) | P00004 | SASDAB2 | 3jbt | 104 | 1.14 | 48 | 41.4% |
+
+The computed neutron match points land at 41–47% D₂O across three unrelated proteins,
+against a textbook 40–45%. Each is a separate calculation over a different composition, so
+their clustering in the right band is a cross-system check the SANS model was not tuned to
+pass. They are predictions: no deposited neutron curve exists for any of these three.
 
 Lysozyme is the development and regression target: if the harness cannot reproduce
 lysozyme, nothing else it reports is trustworthy. RNase A is the closest available
@@ -224,12 +237,14 @@ preparation, crystal fit — and keeping only what survived. A candidate that me
 ```
 saxsnmr/fetch.py   SASBDB, UniProt, PDBe/SIFTS, AlphaFold, BMRB, GNOM P(r)
 saxsnmr/saxs.py    I(q) from coordinates, Guinier, P(r), chi-squared fitting
+saxsnmr/sans.py    neutron scattering: scattering lengths, H/D exchange, contrast
 saxsnmr/md.py      PDB sanitising, structure prep, implicit-solvent MD
 saxsnmr/nmr.py     secondary chemical shifts and comparison to DSSP
 tools/make_notebook.py                    generates the notebooks; edit this, not the .ipynb
 notebooks/02_phase1_lysozyme.ipynb        reference system
 notebooks/03_phase1_rnase_a.ipynb         same analysis, rigid analogue
 notebooks/04_phase1_cytochrome_c.ipynb    same analysis, different fold + cofactor
+notebooks/05_sans_validation.ipynb        validates the neutron calculator itself
 ```
 
 The notebooks are **build output**. Editing cells in Jupyter works for a quick experiment,
@@ -238,8 +253,9 @@ Hand-editing `.ipynb` JSON is error-prone and its diffs are unreadable, which is
 reason for generating it.
 
 ```
-python tools/make_notebook.py             # all systems
-python tools/make_notebook.py rnase_a     # just one
+python tools/make_notebook.py             # all notebooks
+python tools/make_notebook.py rnase_a     # just one system
+python tools/make_notebook.py sans        # just the SANS validation
 ```
 
 **All three notebooks come from one `System` config each.** Only the molecule, the
@@ -250,6 +266,29 @@ that system's config rather than worked around silently.
 
 Adding a fourth system means adding one `System` entry. Screen it end to end first; see
 the reference-systems section for how many plausible candidates do not survive that.
+
+**The generator compiles every code cell before writing.** Cell sources are built by
+string substitution into templates, and a mangled escape produces a notebook that looks
+correct until someone runs it — which happened, and shipped a `SyntaxError` into the first
+cell of a notebook. Failing at generation costs a second; failing in a notebook costs
+however long it took to reach that cell.
+
+**The notebooks check that the imported `saxsnmr` is current.** A Jupyter kernel that
+imported the package before it was last edited keeps the old module object, and new names
+are simply absent — surfacing much later as an opaque `ImportError` in whichever cell
+first needs one, after the simulations have already been paid for. The first cell now
+verifies the API surface and, if it is stale, tells you to restart or to purge the cached
+modules:
+
+```python
+import sys
+for m in [k for k in sys.modules if k == "saxsnmr" or k.startswith("saxsnmr.")]:
+    del sys.modules[m]
+```
+
+Purge the whole package, not just the top level: `importlib.reload(saxsnmr)` re-executes
+`__init__.py` but leaves the submodules cached, so a new `sans.py` would call into a stale
+`saxs.py` and fail more confusingly than before.
 
 ## Install
 
@@ -561,6 +600,83 @@ The result is consistent across all three systems, which it was not before:
 An MCC near 0.4 is modest but real, and it is the ceiling this method reaches on a
 correct structure. The MD ensembles score within ~0.02 of their crystal structures in
 every case, so this comparison bounds the method and cannot separate the models.
+
+### Neutron scattering: what the calculator is and is not
+
+`saxsnmr/sans.py` implements SANS as a forward model. It is computationally *simpler* than
+the X-ray case — nuclei are point scatterers, so the scattering length carries no q
+dependence and there is no Cromer-Mann expansion — and it reuses the X-ray distance
+histograms unchanged. What differs is hydrogen.
+
+**Validated** (`notebooks/05_sans_validation.ipynb`):
+
+| check | result |
+|---|---|
+| solvent SLDs vs published nuclear data | H₂O −0.0558, D₂O +0.6382 fm/Å³ — exact |
+| exchangeable-H classification (lysozyme) | 696 carbon-bound, 263 on N/O/S |
+| contrast match point | 46.8% D₂O (textbook 40–45%) |
+| I(0) at the match point | 0.001% of either extreme |
+| perdeuterated protein | **no match point exists** in [0, 1] |
+| **Guinier limit vs analytic weighted Rg** | **agree to < 0.1 Å** across contrasts |
+
+The last row is the real test. Rg can be computed either as an analytic weighted second
+moment straight from coordinates, or by fitting the Guinier limit of the computed I(q).
+The two share no code beyond the coordinates, so agreement validates the scattering
+lengths, the contrast term and the Debye sum together.
+
+**Rg is weighting-dependent, and this caught an error of mine.** I first asserted the
+neutron and X-ray Guinier Rg should match and treated the 1.4 Å gap as a bug. It is not:
+X-rays weight by electron count where hydrogen is ~1 and everything is positive, while
+neutrons weight carbon-bound hydrogen at **−3.74 fm**. Those hydrogens sit largely on
+outward-pointing side chains, so their negative contribution at large radius lowers the
+neutron-weighted Rg. For lysozyme in D₂O it sits 1.25 Å below the geometric value. SANS
+and SAXS Rg are different observables.
+
+**Not validated: any fit to an experimental protein SANS curve.** This is the honest
+limitation, and it is about the data.
+
+Biomolecular SANS is mostly done on **labelled and contrast-matched** samples, because
+that is the reason to choose neutrons at all — for overall shape, SAXS is cheaper, higher
+resolution and far more abundant. So deposited neutron data is dominated by exactly the
+cases a single-chain protonated forward model cannot represent. Screening SASBDB found:
+
+- **zero** neutron entries for lysozyme or RNase A; the one "cytochrome c" hit is a
+  three-component membrane complex in Fos-choline detergent
+- perdeuterated protein (`SASDKK6`), contrast-matched heterodimers (`SASDKM6`, `SASDKN6`)
+- membrane proteins in detergent micelles the model does not represent
+- construct/structure mismatch, no less common than on the X-ray side
+
+Perdeuteration support was added because of this — without it the model gets the sign of
+the hydrogen contribution wrong for about a third of the atoms in a labelled sample. The
+closest usable case (`SASDKK6`, deuterated sulfite reductase hemoprotein) still gives
+χ² ≈ 35 for non-neutron reasons: the structure covers 465 of 570 residues and its siroheme
+and Fe₄S₄ cluster are stripped. Its χ² also moves by under 3% across the whole plausible
+range of D₂O fraction and deuteration, so it does not constrain the contrast parameters —
+and the entry records neither.
+
+**A prediction that failed.** I expected the incoherent background term to matter in a
+protonated buffer and not in D₂O. It does not come out that way: of four curves, one
+protonated case improves 27% and two are unaffected, while both D₂O cases improve
+slightly. The explanation is that deposited curves are *reduced* data with the buffer
+already subtracted, so what the term captures is residual imperfect subtraction — a
+property of the reduction pipeline, not of the buffer. The failed prediction is kept in
+the notebook; one that fails against data is worth more than one never tested.
+
+The background is constrained **non-negative**, which is physics rather than convenience:
+incoherent scattering adds intensity and cannot subtract it. An unconstrained term went
+negative on three of five curves and was absorbing misfit rather than modelling anything.
+
+**Two tools evaluated and not used**
+
+- [NuMagSANS](https://github.com/AdamsMP92/NuMagSANS) computes SANS from **magnetic
+  materials** — magnetization fields imported from MuMax3 or OOMMF, not atomic
+  coordinates. Its own documentation states it does not handle biomolecular SANS. Right
+  acronym, different physics.
+- [Geant4](https://github.com/Geant4/geant4) simulates "the passage of particles through
+  matter" for high-energy, nuclear, accelerator and medical physics. It is **not a
+  molecular dynamics engine**: no force fields, no conformational dynamics, nothing that
+  produces a protein ensemble. Geant4-DNA models radiation damage at nanoscale, which
+  answers a different question from the one this project's MD asks.
 
 ### MD throughput
 

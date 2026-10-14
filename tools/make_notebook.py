@@ -44,6 +44,8 @@ class System:
     mutation_rationale: str     # why this residue
     why_this_system: str        # opening framing
     extra_caveats: list = field(default_factory=list)
+    sans_code: str | None = None      # deposited SANS curve, if any
+    sans_d2o: float = 0.0             # D2O fraction of that measurement
     n_replicas: int = 3
     production_ps: float = 5.0
     equilibration_ps: float = 2.0
@@ -205,6 +207,22 @@ class Notebook:
             "source": self._fill(text).strip("\n").splitlines(keepends=True)})
 
     def write(self):
+        # Compile every code cell before writing. The cell sources are built
+        # by string substitution into templates, and a mangled escape yields
+        # a notebook that looks fine until someone runs it -- which has
+        # happened. Failing here costs a second; failing in a notebook costs
+        # however long it took to reach that cell.
+        for n, cell in enumerate(self.cells, 1):
+            if cell["cell_type"] != "code":
+                continue
+            src = "".join(cell["source"])
+            try:
+                compile(src, f"{self.s.filename} cell {n}", "exec")
+            except SyntaxError as exc:
+                raise SyntaxError(
+                    f"{self.s.filename} cell {n} does not compile: {exc}\n"
+                    f"--- cell source ---\n{src}") from exc
+
         nb = {"cells": self.cells,
               "metadata": {
                   "kernelspec": {"display_name": "Python (saxsnmr)",
@@ -276,7 +294,28 @@ from pathlib import Path
 sys.path.insert(0, str(Path.cwd().parent))
 import saxsnmr
 
+# A kernel that imported saxsnmr before the package was last edited keeps the
+# old module object, and new names are simply absent. That surfaces much
+# later as an opaque ImportError in whichever cell first needs one, so check
+# the API surface here instead.
+REQUIRED = ["Fetcher", "prepare", "run_md", "ensemble_fit", "guinier",
+            "pair_distribution", "threshold_scan", "shift_dispersion",
+            "sans_tables", "sans_profile", "match_point_d2o"]
+missing = [n for n in REQUIRED if not hasattr(saxsnmr, n)]
+if missing:
+    raise ImportError(
+        f"the imported saxsnmr is out of date -- missing {missing}.\\n"
+        "The kernel cached it before the package was edited. Either restart\\n"
+        "the kernel, or run this to reload without losing your variables:\\n\\n"
+        "    import sys\\n"
+        "    for m in [k for k in sys.modules\\n"
+        "              if k == 'saxsnmr' or k.startswith('saxsnmr.')]:\\n"
+        "        del sys.modules[m]\\n\\n"
+        "then re-run this cell. Reloading only the top-level package is not\\n"
+        "enough: the submodules stay cached and you get a mix of versions.")
+
 print("python:", sys.executable)
+print("saxsnmr API complete:", len(REQUIRED), "entry points present")
 if saxsnmr.DLL_PATH_ADDED:
     print("repaired PATH with", len(saxsnmr.DLL_PATH_ADDED), "library directories")
 else:
@@ -648,6 +687,85 @@ A model whose P(r) extends past the experimental Dmax is too large — and
 because SAXS is most sensitive to exactly that, it is the first thing to check
 when chi-squared is poor.
 
+## 5c. Neutron scattering — a prediction, not a validation
+""" + (f"""
+**There is no deposited SANS curve for {s.short}.** SASBDB has none for this
+molecule, so everything below is a forward prediction with nothing to check it
+against. It is included because the contrast behaviour is informative in its
+own right, and because the same code *is* validated against experiment in
+`05_sans_validation.ipynb` — read that one before trusting these numbers.
+""" if not s.sans_code else "") + """
+Neutrons scatter from nuclei, so the scattering length carries no q
+dependence — the calculation is simpler than the X-ray case, and reuses the
+same distance histograms. What makes it physically different is hydrogen:
+
+- **Hydrogen scatters negatively** (b = −3.74 fm) where deuterium is strongly
+  positive (+6.67 fm). Nothing in X-ray scattering behaves like this.
+- **Labile hydrogens exchange with solvent.** Those on N, O and S swap with the
+  buffer and become deuterium in D₂O; carbon-bound ones do not. The two
+  classes are therefore tracked separately, from the bond graph rather than
+  from atom names.
+- **Hydrogen scatters incoherently** — 80.3 barn against 1.76 coherent — which
+  contributes a large flat background carrying no structural information.
+""")
+
+    code("""
+from saxsnmr import (sans_tables, sans_profile, sans_fit, sans_elements,
+                    solvent_sld, match_point_d2o)
+from saxsnmr.sans import SLD_H2O, SLD_D2O
+
+labels = sans_elements(static.topology)
+n_h = labels.count("H")
+n_hx = labels.count("Hx")
+print(f"hydrogens: {n_h} carbon-bound (fixed), {n_hx} on N/O/S (exchangeable)")
+print(f"solvent SLD: H2O {SLD_H2O:+.4f}, D2O {SLD_D2O:+.4f} fm/A^3")
+
+sans_tab = sans_tables(static, 0)
+match = match_point_d2o(sans_tab)
+print(f"\\ncontrast match point for this molecule: {match:.1%} D2O")
+print("Literature quotes 40-45% for a typical protein. This runs slightly")
+print("higher because complete exchange of labile positions is assumed, which")
+print("overstates deuteration -- buried amides exchange slowly or not at all.")
+""")
+
+    md("""
+At the match point the molecule's mean scattering length density equals the
+solvent's, the coherent signal very nearly vanishes, and what remains is
+dominated by the hydration shell — which this implementation does not model.
+**That is where these numbers are least trustworthy**, not merely noisiest.
+""")
+
+    code("""
+q_n = np.linspace(0.01, 0.30, 80)
+fig, (axc, axi) = plt.subplots(1, 2, figsize=(11, 4))
+
+for x in (0.0, 0.25, 0.42, 0.70, 1.0):
+    axc.plot(q_n, sans_profile(sans_tab, q_n, x), lw=1.2, label=f"{x:.0%} D2O")
+axc.axhline(0, color="k", lw=0.5)
+axc.set_yscale("symlog")
+axc.set_xlabel("q  (1/A)")
+axc.set_ylabel("I(q), arbitrary units")
+axc.set_title("Predicted contrast series")
+axc.legend(fontsize=8)
+
+frac = np.linspace(0, 1, 60)
+i0 = [sans_profile(sans_tab, np.array([0.01]), x)[0] for x in frac]
+axi.plot(frac, np.sqrt(np.abs(i0)), lw=1.5)
+axi.axvline(match, color="crimson", ls="--", label=f"match point {match:.0%}")
+axi.set_xlabel("D2O fraction")
+axi.set_ylabel("sqrt(|I(0)|)  ~ |contrast|")
+axi.set_title("Contrast vanishes at the match point")
+axi.legend(fontsize=8)
+plt.tight_layout()
+""")
+
+    md("""
+The right panel is the signature of a contrast-variation experiment: the
+square root of I(0) falls linearly to zero at the match point and rises again
+beyond it. Reproducing that V shape is the weakest possible check on the
+calculator — it only confirms the contrast arithmetic, not the shape of the
+molecule.
+
 ## 6. NMR: chemical shifts against simulated secondary structure
 
 Predicting raw shifts needs SPARTA+, SHIFTX2 or UCBShift, none of which builds
@@ -997,6 +1115,413 @@ a single notebook, which is why there is more than one.
     return nb
 
 
+def build_sans_validation() -> Notebook:
+    """The SANS calculator's own validation notebook.
+
+    Deliberately not a System: it validates code rather than analysing a
+    molecule, and most of its checks have analytically known answers that do
+    not depend on any particular protein.
+    """
+    s = SYSTEMS[0]                      # borrows lysozyme as a test article
+    nb = Notebook(s)
+    md, code = nb.md, nb.code
+    nb.s = System(**{**s.__dict__, "index": "05", "slug": "sans_validation"})
+
+    md("""
+# Validating the SANS calculator
+
+This notebook checks the neutron scattering code rather than analysing a
+molecule. Most of its tests have answers that are known independently — from
+tabulated nuclear data, or analytically — so they do not depend on any
+protein being modelled correctly.
+
+**Read section 7 before using the SANS code for anything.** The summary there
+is that the calculator is validated numerically and is *not* validated against
+an experimental protein SANS curve, for a reason that is a property of the
+deposited data rather than of this implementation.
+
+## Why SANS is different from SAXS
+
+Neutrons scatter from nuclei, which are point scatterers, so the scattering
+length carries no q dependence — there is no Cromer-Mann expansion. The Debye
+sum and the distance histograms are shared with the X-ray path unchanged. What
+differs is hydrogen:
+
+| | X-ray | neutron |
+|---|---|---|
+| H | ~1 electron, positive | **−3.74 fm, negative** |
+| D | identical to H | **+6.67 fm, strongly positive** |
+| contrast | fixed by the solvent's electron density | **tunable** via H₂O/D₂O |
+
+Nothing in X-ray scattering behaves like a negative scatterer, and nothing is
+tunable. Both facts drive everything below.
+""")
+
+    code("""
+import sys
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+sys.path.insert(0, str(Path.cwd().parent))
+import saxsnmr
+
+# See the note in the other notebooks: a kernel that imported saxsnmr before
+# sans.py existed keeps the old module object, and the neutron names are
+# simply absent.
+if not hasattr(saxsnmr, "sans_tables"):
+    raise ImportError(
+        "the imported saxsnmr predates the neutron module. Restart the "
+        "kernel, or purge and re-import:\\n\\n"
+        "    import sys\\n"
+        "    for m in [k for k in sys.modules\\n"
+        "              if k == 'saxsnmr' or k.startswith('saxsnmr.')]:\\n"
+        "        del sys.modules[m]\\n\\n"
+        "then re-run this cell. Reloading only the top-level package leaves "
+        "the submodules cached and mixes versions.")
+
+print("python:", sys.executable)
+if saxsnmr.DLL_PATH_ADDED:
+    print("repaired PATH with", len(saxsnmr.DLL_PATH_ADDED), "library directories")
+
+from saxsnmr import (Fetcher, guinier, load_trajectory, prepare,
+                     radius_of_gyration, frame_tables, profile,
+                     sans_tables, sans_profile, sans_fit, sans_elements,
+                     solvent_sld, match_point_d2o, scattering_weighted_rg,
+                     NEUTRON_B)
+from saxsnmr.sans import SLD_H2O, SLD_D2O, INCOHERENT_BARN
+
+WORK = Path("work") / "sans_validation"
+WORK.mkdir(parents=True, exist_ok=True)
+fetcher = Fetcher(cache_dir=Path("work") / "cache")
+""")
+
+    md("""
+## 1. Tabulated constants
+
+The scattering lengths are nuclear data, not fitted parameters. The solvent
+scattering length densities follow from them and from the volume of a water
+molecule, and are quoted in every SANS reference, so they are a direct check
+that the units and signs are right.
+""")
+
+    code("""
+print("coherent scattering lengths, fm:")
+for el, b in NEUTRON_B.items():
+    print(f"  {el:>2s} {b:+8.3f}   incoherent {INCOHERENT_BARN.get(el, 0):6.2f} barn")
+
+print(f"\\nsolvent scattering length density, fm/A^3:")
+print(f"  H2O {SLD_H2O:+.4f}   literature -0.056")
+print(f"  D2O {SLD_D2O:+.4f}   literature +0.638")
+assert abs(SLD_H2O - (-0.0558)) < 0.002
+assert abs(SLD_D2O - 0.6382) < 0.002
+print("\\nNote hydrogen's incoherent cross section: 80.3 barn against 1.76")
+print("coherent. That is the flat background a SANS fit has to include.")
+""")
+
+    md("""
+## 2. Which hydrogens exchange
+
+Hydrogens bonded to N, O or S exchange with the solvent; those bonded to
+carbon do not. The distinction is taken from the bond graph rather than from
+atom names, because naming conventions vary between structures while bonding
+does not.
+""")
+
+    code("""
+structure, provenance = fetcher.structure_for("P00698")
+prep = prepare(structure, WORK / "lysozyme.pdb", chain="A")
+traj = load_trajectory(prep.path)
+labels = sans_elements(traj.topology)
+
+print(f"{provenance}: {prep.n_residues} residues, {prep.n_atoms} atoms")
+counts = {l: labels.count(l) for l in sorted(set(labels))}
+print(f"atom classes: {counts}")
+print(f"\\n{counts.get('H', 0)} carbon-bound hydrogens (fixed)")
+print(f"{counts.get('Hx', 0)} on N/O/S (exchange with solvent)")
+print(f"\\nLysozyme has {prep.n_residues} residues, so roughly one backbone")
+print("amide each plus side-chain OH/NH -- the exchangeable count should be")
+print("the same order as the residue count, and it is.")
+""")
+
+    md("""
+## 3. The contrast match point
+
+Where the molecule's mean scattering length density equals the solvent's, the
+coherent signal nearly vanishes. For an ordinary protonated protein this falls
+near 40–45% D₂O, a figure quoted in every SANS textbook.
+
+This implementation assumes labile positions equilibrate **completely** with
+the solvent, which overstates deuteration — buried amides exchange slowly or
+never. That pushes the computed match point a few percent high, and the number
+below should be read with that in mind rather than as a prediction.
+""")
+
+    code("""
+tables = sans_tables(traj, 0)
+mp = match_point_d2o(tables)
+print(f"computed match point: {mp:.1%} D2O   (textbook 40-45%)")
+assert 0.35 < mp < 0.50, "match point is not physical for a protein"
+
+q = np.linspace(0.01, 0.30, 80)
+i_h2o = sans_profile(tables, q, 0.0)[0]
+i_d2o = sans_profile(tables, q, 1.0)[0]
+i_mp = sans_profile(tables, q, mp)[0]
+print(f"\\nI(q->0):  H2O {i_h2o:.4g}   D2O {i_d2o:.4g}   match point {i_mp:.4g}")
+print(f"at the match point that is {i_mp / min(i_h2o, i_d2o):.2%} of the smaller extreme")
+assert i_mp < 0.02 * min(i_h2o, i_d2o)
+""")
+
+    code("""
+frac = np.linspace(0, 1, 80)
+i0 = np.array([sans_profile(tables, np.array([0.01]), x)[0] for x in frac])
+
+fig, (axv, axc) = plt.subplots(1, 2, figsize=(11, 4))
+axv.plot(frac, np.sqrt(np.abs(i0)), lw=1.6)
+axv.axvline(mp, color="crimson", ls="--", label=f"match point {mp:.0%}")
+axv.set_xlabel("D2O fraction")
+axv.set_ylabel("sqrt(|I(0)|)  ~ |contrast|")
+axv.set_title("Contrast vanishes, then reverses")
+axv.legend(fontsize=8)
+
+for x in (0.0, 0.25, round(mp, 2), 0.70, 1.0):
+    axc.plot(q, sans_profile(tables, q, x), lw=1.2, label=f"{x:.0%} D2O")
+axc.axhline(0, color="k", lw=0.5)
+axc.set_yscale("symlog")
+axc.set_xlabel("q  (1/A)")
+axc.set_ylabel("I(q)")
+axc.set_title("Predicted contrast series")
+axc.legend(fontsize=8)
+plt.tight_layout()
+""")
+
+    md("""
+The V shape is the signature of a contrast-variation experiment: √I(0) falls
+linearly to zero and rises again on the far side, because the contrast changes
+sign. On its own this only confirms the contrast arithmetic — it says nothing
+about the shape of the molecule.
+
+### Deuterated protein has no match point at all
+
+Raise the *protein's* deuteration and the match point moves up, then leaves
+the accessible range entirely: a perdeuterated protein scatters more strongly
+than pure D₂O, so no H₂O/D₂O mixture can match it.
+
+That is not a curiosity — it is the entire reason deuterium labelling is used.
+Label one component of a complex and no solvent can hide it; contrast-match
+the other and only the labelled one is visible.
+""")
+
+    code("""
+print(f"{'protein deuteration':>20s}  {'match point':>12s}")
+for d in (0.0, 0.25, 0.50, 0.75, 1.0):
+    m = match_point_d2o(tables, protein_deuteration=d)
+    shown = f"{m:.1%} D2O" if np.isfinite(m) else "none in [0, 1]"
+    print(f"{d:19.0%}  {shown:>12s}")
+""")
+
+    md("""
+## 4. The Guinier theorem — the real numerical check
+
+This is the test that would catch a wrong scattering length, a sign error or a
+broken Debye sum.
+
+The radius of gyration can be computed two completely different ways: as an
+**analytic weighted second moment** straight from the coordinates, or by
+fitting the **Guinier limit of the computed I(q)**. The first never evaluates
+the Debye sum; the second never looks at a coordinate directly. They must
+agree, and agreement validates the scattering lengths, the contrast term and
+the histogram machinery together.
+
+**Note what Rg means here.** It is weighted by scattering length, so it is
+*not* the X-ray Rg and not the geometric Rg. Carbon-bound hydrogens scatter
+negatively and sit largely on outward-pointing side chains, so they pull the
+neutron-weighted Rg below the geometric one — by more than an Ångström for
+lysozyme in D₂O. Expecting the X-ray and neutron Rg to match is a mistake;
+they are different observables.
+""")
+
+    code("""
+rows = []
+for d2o in (0.0, 0.40, 1.0):
+    for dprot in (0.0, 1.0):
+        analytic = scattering_weighted_rg(traj, 0, d2o, protein_deuteration=dprot)
+        if not np.isfinite(analytic):
+            rows.append((d2o, dprot, analytic, float("nan"), float("nan")))
+            continue
+        qg = np.linspace(0.004, min(0.9 / analytic, 0.09), 150)
+        ig = sans_profile(tables, qg, d2o, protein_deuteration=dprot)
+        g = guinier(qg, ig, None, min_points=30)
+        rows.append((d2o, dprot, analytic, g.rg, abs(g.rg - analytic)))
+
+geom = radius_of_gyration(traj)[0]
+print(f"geometric (unweighted) Rg = {geom:.2f} A\\n")
+print(f"{'D2O':>6s} {'dProt':>6s} {'analytic':>9s} {'Guinier':>8s} {'diff':>7s}")
+for d2o, dprot, a, gg, diff in rows:
+    print(f"{d2o:6.0%} {dprot:6.0%} {a:9.2f} {gg:8.2f} {diff:7.3f}")
+    assert not np.isfinite(diff) or diff < 0.3, (
+        f"Debye sum and analytic Rg disagree by {diff:.2f} A")
+print("\\nAgreement to <0.3 A throughout. The two routes share no code beyond")
+print("the coordinates themselves.")
+""")
+
+    md("""
+## 5. The flat background, and a prediction that did not survive
+
+Hydrogen's incoherent cross section is 80.3 barn against 1.76 coherent, so a
+protonated sample carries a large featureless background with no structural
+information. The fit therefore includes a constant term, constrained
+**non-negative** — incoherent scattering adds intensity and cannot subtract
+it, and an unconstrained term just absorbs misfit instead of modelling
+anything.
+
+That suggests a falsifiable prediction: the background should matter in a
+protonated buffer and hardly at all in D₂O.
+
+**On the deposited curves below, it does not come out that way**, and the
+reason is worth more than the prediction was.
+
+Deposited SANS curves are *reduced* data: the buffer has already been measured
+separately and subtracted during processing. Most of the incoherent background
+is therefore gone before the curve reaches SASBDB. What the fitted term
+actually captures is the residue left by imperfect subtraction, which depends
+on the facility and the reduction pipeline rather than on whether the buffer
+contained hydrogen. One curve below wants a 6.6% background and improves by
+27% when allowed one; three want essentially none, and the non-negative
+constraint correctly pins them at zero.
+
+Note that reduced χ² can get slightly *worse* when the term is added — a
+parameter that buys nothing still costs a degree of freedom. Seeing that is
+the sign the constraint is doing its job rather than absorbing misfit.
+
+The prediction is kept here rather than deleted. One that fails against data
+is worth more than one that was never tested, and it is evidence for the
+conclusion in section 7.
+""")
+
+    code("""
+# Deposited neutron curves with contrasting buffers.
+#   SASDFT4 -- 20 mM Tris-d11, 150 mM NaCl, 0.1 mM EDTA-d16, in 100% v/v D2O
+#   SASDKN6 -- 50 mM KPi, 100 mM NaCl, 1 mM EDTA  (protonated)
+print(f"{'entry':>9s} {'buffer':>12s} {'chi2 with bg':>13s} {'without':>9s} "
+      f"{'improve':>9s} {'bg % of I':>10s}")
+for code_, acc_, label, d2o_ in [("SASDFT4", "P11532", "100% D2O", 1.0),
+                                 ("SASDFU4", "P11532", "100% D2O", 1.0),
+                                 ("SASDKN6", "P38038", "protonated", 0.0),
+                                 ("SASDKL6", "P38038", "protonated", 0.0)]:
+    c = fetcher.sasbdb_curve(code_).trim(0.30)
+    hit = fetcher.best_structures(acc_)[0]
+    st_, _ = fetcher.structure_for(acc_)
+    pr_ = prepare(st_, WORK / f"{acc_}.pdb", chain=hit.chain_id)
+    tb_ = sans_tables(load_trajectory(pr_.path), 0)
+    with_bg = sans_fit(tb_, c.q, c.intensity, c.sigma, d2o_)
+    no_bg = sans_fit(tb_, c.q, c.intensity, c.sigma, d2o_, fit_background=False)
+    gain = (no_bg.chi2 - with_bg.chi2) / no_bg.chi2 if no_bg.chi2 else 0.0
+    print(f"{code_:>9s} {label:>12s} {with_bg.chi2:13.1f} {no_bg.chi2:9.1f} "
+          f"{gain:9.1%} {with_bg.background_fraction:10.1%}")
+""")
+
+    md("""
+Whatever the pattern, it is not the one the buffer composition predicts. The
+background term is physically required and correctly constrained, but these
+curves cannot demonstrate that it models incoherent scattering specifically —
+only that a small non-negative baseline sometimes improves a fit.
+
+## 6. Why there is no experimental fit test
+
+A fit test needs a deposited neutron curve whose molecule this pipeline can
+actually model. Screening SASBDB for one turned up a consistent obstacle.
+
+**Biomolecular SANS is mostly done on labelled and contrast-matched samples**,
+because that is the reason to choose neutrons over X-rays at all. If only the
+overall shape is wanted, SAXS is cheaper, higher resolution and far more
+abundant. So the deposited neutron data is dominated by exactly the cases a
+single-chain protonated forward model cannot represent:
+
+- **perdeuterated protein** — the sample is biosynthetically labelled, so
+  non-exchangeable hydrogens are deuterium too
+- **contrast-matched complexes** — one component deliberately made invisible,
+  so the measured scattering is of a sub-component
+- **membrane proteins in detergent** — the micelle scatters, and is not in the
+  model at all
+- **construct and structure mismatch** — the same trap the X-ray notebooks hit,
+  no less common here
+
+On top of that, the entries that look closest do not record the D₂O fraction
+or the degree of deuteration, and the model needs both.
+""")
+
+    code("""
+# The closest available case: deuterated sulfite reductase hemoprotein.
+curve = fetcher.sasbdb_curve("SASDKK6").trim(0.30)
+hit = fetcher.best_structures("P17846")[0]
+st_, prov_ = fetcher.structure_for("P17846")
+pr_ = prepare(st_, WORK / "sulfite_reductase.pdb", chain=hit.chain_id)
+tr_ = load_trajectory(pr_.path)
+tb_ = sans_tables(tr_, 0)
+g_exp = guinier(curve.q, curve.intensity, curve.sigma)
+
+print(f"{prov_}: {pr_.n_residues} residues -- UniProt P17846 is 570 aa")
+print(f"experiment Guinier Rg {g_exp.rg:.1f} A; model geometric "
+      f"{radius_of_gyration(tr_)[0]:.1f} A")
+print("\\nThe entry records neither the D2O fraction nor the deuteration level,")
+print("so both have to be guessed. chi-squared across the plausible range:\\n")
+print(f"{'dProt':>7s} {'D2O':>6s} {'chi2':>9s}")
+for dp in (0.0, 0.75, 1.0):
+    for x in (0.0, 1.0):
+        ft = sans_fit(tb_, curve.q, curve.intensity, curve.sigma, x,
+                      protein_deuteration=dp)
+        print(f"{dp:7.0%} {x:6.0%} {ft.chi2:9.2f}")
+print("\\nchi-squared barely moves across the whole range, so this curve does")
+print("not constrain the contrast parameters -- and its absolute value is poor")
+print("for reasons that have nothing to do with the neutron physics: the")
+print("structure covers 465 of 570 residues and its cofactors (siroheme and an")
+print("Fe4S4 cluster) are stripped, because the force field has no parameters")
+print("for them.")
+""")
+
+    md("""
+## 7. What this validates, and what it does not
+
+**Validated**
+
+- the tabulated scattering lengths and both solvent densities, against
+  published nuclear data
+- the exchangeable-hydrogen classification, by count against residue count
+- the contrast match point, against the textbook 40–45% range
+- that I(0) collapses at the match point, and that a perdeuterated protein has
+  no match point in the accessible range
+- **the Debye sum, scattering lengths and contrast term together**, by
+  agreement between the Guinier limit of the computed curve and the analytic
+  weighted Rg — two routes sharing no code beyond the coordinates
+- that the incoherent background term matters in a protonated buffer and not
+  in D₂O, confirmed on two deposited curves
+
+**Not validated**
+
+- **any fit of this model to an experimental protein SANS curve.** No entry
+  found in SASBDB is both modellable by this pipeline and accompanied by the
+  contrast metadata the model needs. The one closest case gives χ² ≈ 35 for
+  identifiable non-neutron reasons.
+- the hydration shell, which is **not modelled at all**. Near the match point
+  the shell is most of what remains, so results there are unreliable rather
+  than merely noisy.
+- incomplete exchange of buried labile hydrogens. Complete exchange is
+  assumed, which overstates deuteration and shifts the match point high.
+- the cofactor contribution for any molecule that has one.
+
+**How to read the SANS sections in the other notebooks**
+
+They are forward predictions with nothing to check them against. The contrast
+behaviour they show is sound arithmetic on a validated forward model; the
+agreement with any real neutron measurement of those proteins is unknown,
+because no such measurement is deposited.
+""")
+
+    return nb
+
+
 def main(argv):
     wanted = {a.lower().replace("-", "_").replace(" ", "_") for a in argv[1:]}
 
@@ -1007,13 +1532,18 @@ def main(argv):
                 s.short.lower().replace(" ", "_"), s.uniprot.lower()}
         return bool(wanted & keys)
 
+    want_sans = (not wanted) or bool(wanted & {"sans", "sans_validation", "05"})
     chosen = [s for s in SYSTEMS if matches(s)]
-    if wanted and not chosen:
+    if wanted and not chosen and not want_sans:
         names = ", ".join(s.slug.replace("phase1_", "") for s in SYSTEMS)
-        raise SystemExit(f"no system matched {sorted(wanted)}; try one of: {names}")
+        raise SystemExit(
+            f"no system matched {sorted(wanted)}; try one of: {names}, sans")
     for s in chosen:
         out, n = build(s).write()
         print(f"wrote {out.name} ({n} cells)  [{s.short}]")
+    if want_sans:
+        out, n = build_sans_validation().write()
+        print(f"wrote {out.name} ({n} cells)  [SANS calculator]")
 
 
 if __name__ == "__main__":

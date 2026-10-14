@@ -75,6 +75,9 @@ from .nmr import (ShiftComparison, best_offset, compare_to_dssp,  # noqa: E402
                   shift_dispersion, threshold_scan)
 from .saxs import (GuinierFit, SaxsFit, ScatteringTables, dmax_from_pr,  # noqa: E402
                    fit, guinier, pair_distribution, profile, rg_from_pr)
+from .sans import (NEUTRON_B, SansFit, match_point_d2o, sans_elements,  # noqa: E402
+                   sans_fit, sans_profile, sans_tables,
+                   scattering_weighted_rg, solvent_sld)
 
 __version__ = "0.1.0"
 
@@ -83,6 +86,8 @@ __all__ = [
     "prepare", "sanitise_pdb", "run_md", "benchmark", "PreparedStructure", "MDResult",
     "ScatteringTables", "profile", "fit", "SaxsFit",
     "guinier", "GuinierFit", "pair_distribution", "rg_from_pr", "dmax_from_pr",
+    "sans_tables", "sans_profile", "sans_fit", "SansFit", "sans_elements",
+    "solvent_sld", "match_point_d2o", "NEUTRON_B", "scattering_weighted_rg",
     "secondary_shifts", "csi_assignment", "compare_to_dssp", "best_offset",
     "ShiftComparison", "matthews_corrcoef", "threshold_scan", "shift_dispersion",
     "frame_tables", "ensemble_fit", "radius_of_gyration", "load_trajectory",

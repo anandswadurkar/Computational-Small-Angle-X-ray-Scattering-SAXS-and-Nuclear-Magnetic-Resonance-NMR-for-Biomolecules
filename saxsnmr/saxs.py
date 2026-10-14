@@ -114,8 +114,8 @@ class ScatteringTables:
     @classmethod
     def from_coordinates(cls, xyz: np.ndarray, elements: list[str],
                          sasa_frac: np.ndarray, bin_width: float = 0.25,
-                         r_max: float | None = None,
-                         chunk: int = 256) -> "ScatteringTables":
+                         r_max: float | None = None, chunk: int = 256,
+                         alphabet: tuple[str, ...] | None = None) -> "ScatteringTables":
         """Build tables for one conformation.
 
         ``r_max`` fixes the binning so tables from different frames can be
@@ -141,7 +141,19 @@ class ScatteringTables:
         nbins = centres.size
 
         elements_arr = np.asarray(elements)
-        idx = {e: np.flatnonzero(elements_arr == e) for e in _ELEMENTS}
+        # `alphabet` lets a caller use labels beyond the X-ray element set --
+        # the neutron code distinguishes exchangeable from non-exchangeable
+        # hydrogen, for instance. Unknown labels are refused rather than
+        # dropped: silently omitting atoms from a scattering calculation
+        # produces a plausible curve for the wrong molecule.
+        allowed = tuple(_ELEMENTS) if alphabet is None else tuple(alphabet)
+        unknown = sorted(set(elements_arr.tolist()) - set(allowed))
+        if unknown:
+            raise ValueError(
+                f"no scattering parameters for element(s) {unknown}. Pass an "
+                "`alphabet` that includes them, or strip those atoms before "
+                "building tables -- they cannot be silently ignored.")
+        idx = {e: np.flatnonzero(elements_arr == e) for e in allowed}
         idx = {e: v for e, v in idx.items() if v.size}
         # position of each atom within its element group, for fast block slicing
         group_of = {e: np.zeros(n, dtype=bool) for e in idx}
