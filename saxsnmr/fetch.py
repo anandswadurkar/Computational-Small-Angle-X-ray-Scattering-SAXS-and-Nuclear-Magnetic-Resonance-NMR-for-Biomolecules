@@ -23,18 +23,19 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 import requests
 
 __all__ = [
-    "Fetcher",
-    "SaxsCurve",
-    "Pddf",
     "Construct",
+    "Fetcher",
+    "Pddf",
+    "SaxsCurve",
     "StructureHit",
 ]
 
@@ -122,7 +123,7 @@ class SaxsCurve:
     def q_range(self) -> tuple[float, float]:
         return float(self.q.min()), float(self.q.max())
 
-    def trim(self, q_max: float = 0.5) -> "SaxsCurve":
+    def trim(self, q_max: float = 0.5) -> SaxsCurve:
         """Restrict to the range where an implicit hydration shell is valid.
 
         Beyond roughly 0.5 1/A the solvent's own structure contributes and a
@@ -228,7 +229,8 @@ class Fetcher:
 
     def constructs(self, code: str) -> list[Construct]:
         entry = self.sasbdb_entry(code)
-        mols = (entry.get("experiment", {}).get("sample", {}) or {}).get("molecule", []) or []
+        sample = entry.get("experiment", {}).get("sample", {}) or {}
+        mols = sample.get("molecule", []) or []
         out = []
         for m in mols:
             out.append(Construct(
@@ -284,7 +286,7 @@ class Fetcher:
             pddf_dmax_A=_nm_to_A(entry.get("pddf_dmax")),
         )
 
-    def pddf(self, code: str) -> "Pddf":
+    def pddf(self, code: str) -> Pddf:
         """Experimental P(r), parsed from the deposited GNOM output file.
 
         SASBDB links the raw `.out` file that ATSAS GNOM produced. Everything
@@ -454,7 +456,7 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
 
 
-def summarise_constructs(fetcher: Fetcher, codes: Iterable[str]) -> "Any":
+def summarise_constructs(fetcher: Fetcher, codes: Iterable[str]) -> Any:
     """Side-by-side construct table for candidate entries.
 
     Intended to be read before joining anything. Differing sequence lengths or

@@ -664,6 +664,50 @@ print(f"simulated Rg = {rg.mean():.2f} +/- {rg.std():.2f} A")
 """)
 
     md("""
+### 4b. Is this trajectory long enough to quote a mean?
+
+Successive MD frames are not independent. Treating them as if they were makes
+the standard error too small by roughly the square root of the correlation
+time, which is how a run that has not converged reports a tight, confident and
+wrong number.
+
+`block_average` corrects for that, and `assess_convergence` checks two
+distinct failures: a series can **drift**, in which case its mean describes no
+particular state, or it can be stationary but so **short** that the mean is
+unresolved. The fixes differ — longer equilibration against a longer
+production run — so they are reported separately.
+
+A 5 ps run sampled every 0.5 ps gives ten frames. Expect that to fail.
+""")
+
+    code("""
+from saxsnmr import assess_convergence, block_average
+
+stats = block_average(rg)
+print(stats)
+print(f"  naive standard error   : {stats.naive_sem:.4f} A")
+print(f"  correlation-corrected  : {stats.sem:.4f} A  "
+      f"({stats.inflation:.1f}x larger)")
+print(f"  effective samples      : {stats.n_effective:.1f} of {stats.n_samples}")
+
+report = assess_convergence(rg, "Rg")
+print()
+print(report)
+# The two effective-sample counts differ on purpose: block_average above used
+# every frame, while assess_convergence first discards what looks like
+# equilibration and reports on the remainder.
+print(f"  discarded as equilibration: {report.equilibration_index} of "
+      f"{len(rg)} frames")
+print(f"  effective samples in what remains: "
+      f"{report.production.n_effective:.1f}")
+if not report.converged:
+    print("\\nThis is the expected answer at this trajectory length. The")
+    print("systematic expansion is still visible -- it is several times the")
+    print("scatter -- but the mean Rg should be quoted with the corrected")
+    print("error, not the naive one.")
+""")
+
+    md("""
 ## 5. SAXS: ensemble profile and fit
 
 The experiment measures one ensemble-averaged curve, so the model must be

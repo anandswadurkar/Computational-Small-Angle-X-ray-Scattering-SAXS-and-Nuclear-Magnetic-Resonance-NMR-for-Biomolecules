@@ -44,7 +44,8 @@ def _repair_windows_dll_path() -> list[str]:
         return []
 
     prefix = Path(_sys.executable).parent
-    if not (prefix / "conda-meta").is_dir() and not (prefix.parent / "conda-meta").is_dir():
+    if (not (prefix / "conda-meta").is_dir()
+            and not (prefix.parent / "conda-meta").is_dir()):
         return []                      # not a conda environment; leave PATH alone
 
     candidates = [prefix,
@@ -66,32 +67,110 @@ DLL_PATH_ADDED = _repair_windows_dll_path()
 
 import numpy as np  # noqa: E402  -- must follow the PATH repair above
 
-from .fetch import (Construct, Fetcher, Pddf, SaxsCurve,  # noqa: E402
-                    StructureHit, summarise_constructs)
-from .md import (MDResult, PreparedStructure, benchmark, prepare, run_md,  # noqa: E402
-                 sanitise_pdb)
-from .nmr import (ShiftComparison, best_offset, compare_to_dssp,  # noqa: E402
-                  csi_assignment, matthews_corrcoef, secondary_shifts,
-                  shift_dispersion, threshold_scan)
-from .saxs import (GuinierFit, SaxsFit, ScatteringTables, dmax_from_pr,  # noqa: E402
-                   fit, guinier, pair_distribution, profile, rg_from_pr)
-from .sans import (NEUTRON_B, SansFit, match_point_d2o, sans_elements,  # noqa: E402
-                   sans_fit, sans_profile, sans_tables,
-                   scattering_weighted_rg, solvent_sld)
+from .fetch import (  # noqa: E402
+    Construct,
+    Fetcher,
+    Pddf,
+    SaxsCurve,
+    StructureHit,
+    summarise_constructs,
+)
+from .md import MDResult, PreparedStructure, benchmark, prepare, run_md, sanitise_pdb  # noqa: E402
+from .nmr import (  # noqa: E402
+    ShiftComparison,
+    best_offset,
+    compare_to_dssp,
+    csi_assignment,
+    matthews_corrcoef,
+    secondary_shifts,
+    shift_dispersion,
+    threshold_scan,
+)
+from .sans import (  # noqa: E402
+    NEUTRON_B,
+    SansFit,
+    match_point_d2o,
+    sans_elements,
+    sans_fit,
+    sans_profile,
+    sans_tables,
+    scattering_weighted_rg,
+    solvent_sld,
+)
+from .saxs import (  # noqa: E402
+    GuinierFit,
+    SaxsFit,
+    ScatteringTables,
+    dmax_from_pr,
+    fit,
+    guinier,
+    pair_distribution,
+    profile,
+    rg_from_pr,
+)
+from .stats import (  # noqa: E402
+    BlockAverage,
+    ConvergenceReport,
+    assess_convergence,
+    autocorrelation_time,
+    block_average,
+    equilibration_start,
+    statistical_inefficiency,
+)
 
 __version__ = "0.1.0"
 
 __all__ = [
-    "Fetcher", "SaxsCurve", "Pddf", "Construct", "StructureHit", "summarise_constructs",
-    "prepare", "sanitise_pdb", "run_md", "benchmark", "PreparedStructure", "MDResult",
-    "ScatteringTables", "profile", "fit", "SaxsFit",
-    "guinier", "GuinierFit", "pair_distribution", "rg_from_pr", "dmax_from_pr",
-    "sans_tables", "sans_profile", "sans_fit", "SansFit", "sans_elements",
-    "solvent_sld", "match_point_d2o", "NEUTRON_B", "scattering_weighted_rg",
-    "secondary_shifts", "csi_assignment", "compare_to_dssp", "best_offset",
-    "ShiftComparison", "matthews_corrcoef", "threshold_scan", "shift_dispersion",
-    "frame_tables", "ensemble_fit", "radius_of_gyration", "load_trajectory",
     "DLL_PATH_ADDED",
+    "NEUTRON_B",
+    "BlockAverage",
+    "Construct",
+    "ConvergenceReport",
+    "Fetcher",
+    "GuinierFit",
+    "MDResult",
+    "Pddf",
+    "PreparedStructure",
+    "SansFit",
+    "SaxsCurve",
+    "SaxsFit",
+    "ScatteringTables",
+    "ShiftComparison",
+    "StructureHit",
+    "assess_convergence",
+    "autocorrelation_time",
+    "benchmark",
+    "best_offset",
+    "block_average",
+    "compare_to_dssp",
+    "csi_assignment",
+    "dmax_from_pr",
+    "ensemble_fit",
+    "equilibration_start",
+    "fit",
+    "frame_tables",
+    "guinier",
+    "load_trajectory",
+    "match_point_d2o",
+    "matthews_corrcoef",
+    "pair_distribution",
+    "prepare",
+    "profile",
+    "radius_of_gyration",
+    "rg_from_pr",
+    "run_md",
+    "sanitise_pdb",
+    "sans_elements",
+    "sans_fit",
+    "sans_profile",
+    "sans_tables",
+    "scattering_weighted_rg",
+    "secondary_shifts",
+    "shift_dispersion",
+    "solvent_sld",
+    "statistical_inefficiency",
+    "summarise_constructs",
+    "threshold_scan",
 ]
 
 # Shrake-Rupley gives absolute SASA; dividing by a per-element maximum turns it
@@ -129,7 +208,10 @@ def _elements_and_sasa(traj, frame: int):
 
     sasa = md.shrake_rupley(traj[frame], mode="atom")[0] * 100.0  # nm^2 -> A^2
     elements, frac = [], []
-    for atom, s in zip(traj.topology.atoms, sasa):
+    # strict=True: a mismatch between the topology and the SASA array
+    # would otherwise silently truncate the atom list, producing a
+    # plausible curve for part of the molecule.
+    for atom, s in zip(traj.topology.atoms, sasa, strict=True):
         sym = atom.element.symbol if atom.element is not None else "C"
         if sym not in _MAX_SASA:
             sym = "C"
@@ -154,7 +236,7 @@ def radius_of_gyration(traj) -> np.ndarray:
     return md.compute_rg(traj) * 10.0
 
 
-def ensemble_fit(md_result: "MDResult | object", curve: SaxsCurve,
+def ensemble_fit(md_result: MDResult | object, curve: SaxsCurve,
                  stride: int = 1, max_frames: int | None = None,
                  bin_width: float = 0.25) -> SaxsFit:
     """Average I(q) over trajectory frames, then fit scale, c1 and c2 once.

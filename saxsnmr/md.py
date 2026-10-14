@@ -19,7 +19,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["PreparedStructure", "prepare", "sanitise_pdb", "run_md", "MDResult", "benchmark"]
+__all__ = ["MDResult", "PreparedStructure", "benchmark", "prepare",
+           "run_md", "sanitise_pdb"]
 
 
 @dataclass
@@ -271,8 +272,9 @@ def benchmark(prepared: PreparedStructure, ps: float = 10.0,
     GPU or a laptop CPU varies by more than an order of magnitude, and every
     scheduling decision downstream depends on the real number.
     """
-    import openmm as mm
     import tempfile
+
+    import openmm as mm
 
     if platforms is None:
         platforms = [mm.Platform.getPlatform(i).getName()

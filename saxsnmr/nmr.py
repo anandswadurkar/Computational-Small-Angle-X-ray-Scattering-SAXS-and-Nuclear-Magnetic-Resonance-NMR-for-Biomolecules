@@ -24,9 +24,16 @@ from dataclasses import dataclass
 
 import numpy as np
 
-__all__ = ["secondary_shifts", "csi_assignment", "compare_to_dssp",
-           "ShiftComparison", "matthews_corrcoef", "threshold_scan",
-           "best_offset", "shift_dispersion"]
+__all__ = [
+    "ShiftComparison",
+    "best_offset",
+    "compare_to_dssp",
+    "csi_assignment",
+    "matthews_corrcoef",
+    "secondary_shifts",
+    "shift_dispersion",
+    "threshold_scan",
+]
 
 # Random-coil 13C shifts, ppm (Wishart & Sykes). Glycine has no C-beta.
 _RANDOM_COIL_CA = {
@@ -123,7 +130,6 @@ def csi_assignment(sec_shifts, threshold: float = CSI_THRESHOLD):
     where the default comes from and why it should not be tuned against a
     reference structure.
     """
-    import pandas as pd
 
     def label(row) -> str:
         v = row["d_diff"]
@@ -155,7 +161,15 @@ def matthews_corrcoef(y_true: np.ndarray, y_pred: np.ndarray,
     t, p, n = c.sum(axis=1), c.sum(axis=0), c.sum()
     num = c.trace() * n - (t * p).sum()
     den = np.sqrt((n ** 2 - (p ** 2).sum()) * (n ** 2 - (t ** 2).sum()))
-    return float(num / den) if den > 0 else float("nan")
+    if den <= 0:
+        # One of the two labellings is constant, so MCC is formally
+        # undefined. Zero is the right summary and NaN is not: a predictor
+        # that answers the same class everywhere carries no information, and
+        # that is exactly the degenerate case this metric exists to expose.
+        # Returning NaN would propagate into a report as a blank rather than
+        # as the verdict.
+        return 0.0
+    return float(num / den)
 
 
 @dataclass
@@ -231,7 +245,7 @@ def compare_to_dssp(csi_table, dssp_codes: np.ndarray, resids: np.ndarray,
                             pd.Series(pred, name="simulated"))
 
     return ShiftComparison(
-        n_compared=int(len(merged)),
+        n_compared=len(merged),
         agreement=float(match.mean()),
         baseline_agreement=baseline,
         balanced_accuracy=float(np.nanmean(recalls)),

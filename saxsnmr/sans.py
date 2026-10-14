@@ -38,12 +38,21 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import least_squares, nnls
 
-from .saxs import ScatteringTables, _DISPLACED_VOLUME
+from .saxs import _DISPLACED_VOLUME, ScatteringTables
 
-__all__ = ["NEUTRON_B", "solvent_sld", "exchangeable_hydrogens",
-           "sans_elements", "sans_tables", "sans_profile", "sans_fit",
-           "SansFit", "SANS_ALPHABET", "match_point_d2o",
-           "scattering_weighted_rg"]
+__all__ = [
+    "NEUTRON_B",
+    "SANS_ALPHABET",
+    "SansFit",
+    "exchangeable_hydrogens",
+    "match_point_d2o",
+    "sans_elements",
+    "sans_fit",
+    "sans_profile",
+    "sans_tables",
+    "scattering_weighted_rg",
+    "solvent_sld",
+]
 
 # Bound coherent scattering lengths, femtometres (Sears, Neutron News 1992).
 # "Hx" is an exchangeable hydrogen: its value is set by the D2O fraction and
@@ -218,7 +227,18 @@ def match_point_d2o(tables: ScatteringTables,
     weakest and the hydration shell dominates what is left, so it marks where
     this implementation is least trustworthy rather than a target to aim for.
     """
-    counts = {e: float(h.sum()) for e, h in tables.elem_sasa.items()}
+    # Atom counts come from the diagonal pair histograms: for one class the
+    # accumulation visits the full n x n block, so the sum is exactly n^2.
+    #
+    # These were previously read from `elem_sasa`, whose sums are proportional
+    # to the counts only because every class shares the same SASA total. That
+    # happens to give the right ratios for real structures, but returns NaN
+    # whenever accessibility is zero -- and it tied a purely compositional
+    # quantity to a surface calculation it has nothing to do with.
+    counts = {}
+    for (ea, eb), hist in tables.pair.items():
+        if ea == eb:
+            counts[ea] = float(np.sqrt(max(hist.sum(), 0.0)))
     total = sum(counts.values())
     if total <= 0:
         return float("nan")
@@ -251,7 +271,7 @@ class SansFit:
     model: np.ndarray
     experiment: np.ndarray
     sigma: np.ndarray
-    tables: "ScatteringTables | None" = None
+    tables: ScatteringTables | None = None
 
     @property
     def background_fraction(self) -> float:

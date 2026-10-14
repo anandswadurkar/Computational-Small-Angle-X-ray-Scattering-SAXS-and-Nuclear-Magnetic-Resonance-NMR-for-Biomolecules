@@ -240,6 +240,10 @@ saxsnmr/saxs.py    I(q) from coordinates, Guinier, P(r), chi-squared fitting
 saxsnmr/sans.py    neutron scattering: scattering lengths, H/D exchange, contrast
 saxsnmr/md.py      PDB sanitising, structure prep, implicit-solvent MD
 saxsnmr/nmr.py     secondary chemical shifts and comparison to DSSP
+saxsnmr/stats.py   correlation-corrected error bars and convergence assessment
+tests/             pytest; offline, checked against closed-form answers
+pyproject.toml     package metadata, ruff and pytest configuration
+.pre-commit-config.yaml
 tools/make_notebook.py                    generates the notebooks; edit this, not the .ipynb
 notebooks/02_phase1_lysozyme.ipynb        reference system
 notebooks/03_phase1_rnase_a.ipynb         same analysis, rigid analogue
@@ -403,7 +407,8 @@ long because this project records what it got wrong; the summary is here.
 | **NMR comparison** | works, modest: MCC 0.39–0.44 against crystal structures, beating baseline |
 | **mutation screening** | runs; **cannot resolve** any of the three mutations tested |
 | **SANS calculator** | validated numerically; **no experimental protein fit** — see below |
-| **tests, LICENSE, CITATION.cff** | **missing** — see Known gaps |
+| **MD convergence** | **not converged** at 5 ps — 8.6–11 effective samples from 30 frames |
+| **tests** | 52, offline, against closed-form answers; `ruff` clean |
 
 **The single most important result:** short implicit-solvent MD improves the SAXS fit for
 RNase A (χ² 2.31 → 1.31), is mildly worse for cytochrome c, and much worse for lysozyme
@@ -414,19 +419,53 @@ property of the method. It is not.
 deposited uncertainties differ by 13–29×. Compare Rg in Ångström across systems; compare
 χ² only within one.
 
+### Verification
+
+`pytest` — 52 tests, no network required, seconds to run:
+
+```
+conda run -n saxsnmr python -m pytest tests/ -q
+```
+
+The strongest are checks against closed-form answers rather than against another
+implementation:
+
+| test | known answer |
+|---|---|
+| Debye sum vs the sphere form factor | `3[sin(qR) − qR·cos(qR)]/(qR)³`, matched past the first minimum at qR ≈ 4.49 |
+| Guinier on a solid sphere | `Rg = R√(3/5)`, recovered to 3% |
+| Rg vs bin width (0.25/0.5/1.0 Å) | unchanged — binning must not introduce physics |
+| neutron Guinier limit | the analytic scattering-length-weighted Rg, across four contrasts |
+| autocorrelation time of AR(1) noise | `τ = ½(1+φ)/(1−φ)` |
+| MCC of a constant predictor | 0 — the degenerate case raw agreement cannot see |
+
+Writing these caught **three bugs that the notebooks had not**:
+
+- `match_point_d2o` derived atom counts from the **SASA-weighted** histograms. Ratios
+  happened to come out right for real structures, so published match points were correct,
+  but it returned `NaN` whenever accessibility was zero and tied a compositional quantity
+  to a surface calculation. Now counted from the diagonal pair histograms.
+- `matthews_corrcoef` returned `NaN` for a constant predictor. That is formally correct —
+  MCC is undefined with zero variance — but NaN propagates into a report as a blank
+  rather than as the verdict, and a constant predictor is exactly the case the metric
+  exists to expose. It now returns 0.
+- The drift criterion in `assess_convergence` compared the fitted drift against the error
+  on the **mean**. Those differ by about √12 for uncorrelated data, so stationary series
+  were flagged as drifting most of the time. A convergence check that always cries wolf
+  gets ignored. Now compared against the uncertainty of the slope; the false-positive rate
+  on stationary noise is 2%.
+
+`ruff check` is clean, configured in `pyproject.toml`, with `pre-commit` hooks. Two `zip`
+calls gained `strict=True`: one over topology atoms and a SASA array, where a length
+mismatch would silently drop atoms from the scattering.
+
 ### Known gaps
 
-Measured against the ground rules in the parent `CLAUDE.md`:
-
-- **No `tests/`.** The validation lives in notebooks and in throwaway scripts. The
-  known-answer checks that exist (Guinier theorem, solvent SLDs, match point, lysozyme
-  regression at χ² 1.662) should be `pytest` cases so a refactor cannot break them quietly.
-- **No `LICENSE` or `CITATION.cff`.** Both are required by the ground rules; the licence
-  choice is the author's.
-- **No `pyproject.toml` or `pre-commit`.** `ruff` has never been run over this code.
-- **No convergence study for the MD.** 5 ps is demonstrably not converged — the replicate
-  scatter shows it — and no block averaging or autocorrelation-corrected error bars are
-  computed.
+- **Validation of the SANS calculator against an experimental protein curve.** See the
+  neutron section — this is a property of the deposited data, not of the code.
+- **Longer trajectories.** The convergence check below says what is needed; nothing here
+  has been run long enough to quote a converged mean.
+- **No continuous integration.** The tests exist but nothing runs them automatically.
 
 ### Lysozyme in detail
 
@@ -757,6 +796,30 @@ negative on three of five curves and was absorbing misfit rather than modelling 
   molecular dynamics engine**: no force fields, no conformational dynamics, nothing that
   produces a protein ensemble. Geant4-DNA models radiation damage at nanoscale, which
   answers a different question from the one this project's MD asks.
+
+### MD convergence: measured, not asserted
+
+Successive frames are not independent, so the naive standard error understates the real
+one by roughly the square root of the correlation time. `saxsnmr/stats.py` corrects for
+that and reports two distinct failures separately, because the fixes differ: a series can
+**drift**, in which case its mean describes no particular state, or be stationary but too
+**short** to resolve a mean.
+
+Three wild-type replicates per system, ten frames each:
+
+| system | frames | effective samples | g | verdict |
+|---|---|---|---|---|
+| lysozyme | 30 | **8.7** | 1.4 | not converged — too short |
+| RNase A | 30 | 11.0 | 2.6 | marginally passes a weak bar |
+| cytochrome c | 30 | **8.6** | 3.0 | not converged — too short |
+
+Per-run correlation-corrected errors on Rg run 1.0–2.0× the naive ones. RNase A clears
+the threshold of ten effective samples, which is a weak bar chosen so that failing it is
+unambiguous; clearing it narrowly is not evidence of convergence.
+
+This replaces an assertion the README previously carried. "5 ps is not converged" was
+believed on the strength of replicate scatter; it is now measured, and the number needed
+to fix it is the effective sample count rather than a guess at a longer run.
 
 ### MD throughput
 

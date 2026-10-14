@@ -29,9 +29,17 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import least_squares
 
-__all__ = ["ScatteringTables", "profile", "fit", "SaxsFit",
-           "guinier", "GuinierFit", "pair_distribution", "rg_from_pr",
-           "dmax_from_pr"]
+__all__ = [
+    "GuinierFit",
+    "SaxsFit",
+    "ScatteringTables",
+    "dmax_from_pr",
+    "fit",
+    "guinier",
+    "pair_distribution",
+    "profile",
+    "rg_from_pr",
+]
 
 # Cromer-Mann coefficients: f(q) = sum_k a_k exp(-b_k (q/4pi)^2) + c
 _CROMER_MANN = {
@@ -83,7 +91,10 @@ def _max_distance(xyz: np.ndarray, chunk: int) -> float:
 def atomic_form_factor(element: str, q: np.ndarray) -> np.ndarray:
     a, b, c = _CROMER_MANN[element]
     s2 = (q / (4.0 * np.pi)) ** 2
-    return sum(ai * np.exp(-bi * s2) for ai, bi in zip(a, b)) + c
+    # strict=True guards the coefficient tables: a and b must stay the
+    # same length, and a typo that shortened one would otherwise drop a
+    # term silently.
+    return sum(ai * np.exp(-bi * s2) for ai, bi in zip(a, b, strict=True)) + c
 
 
 def displaced_form_factor(element: str, q: np.ndarray) -> np.ndarray:
@@ -93,7 +104,8 @@ def displaced_form_factor(element: str, q: np.ndarray) -> np.ndarray:
 
 
 def water_form_factor(q: np.ndarray) -> np.ndarray:
-    return RHO_SOLVENT * V_WATER * np.exp(-(V_WATER ** (2.0 / 3.0)) * q**2 / (4.0 * np.pi))
+    return (RHO_SOLVENT * V_WATER
+            * np.exp(-(V_WATER ** (2.0 / 3.0)) * q**2 / (4.0 * np.pi)))
 
 
 @dataclass
@@ -115,7 +127,7 @@ class ScatteringTables:
     def from_coordinates(cls, xyz: np.ndarray, elements: list[str],
                          sasa_frac: np.ndarray, bin_width: float = 0.25,
                          r_max: float | None = None, chunk: int = 256,
-                         alphabet: tuple[str, ...] | None = None) -> "ScatteringTables":
+                         alphabet: tuple[str, ...] | None = None) -> ScatteringTables:
         """Build tables for one conformation.
 
         ``r_max`` fixes the binning so tables from different frames can be
@@ -127,7 +139,8 @@ class ScatteringTables:
         sasa_frac = np.asarray(sasa_frac, dtype=np.float64)
         n = len(elements)
         if xyz.shape != (n, 3) or sasa_frac.shape != (n,):
-            raise ValueError("coordinates, elements and sasa_frac disagree on atom count")
+            raise ValueError(
+                "coordinates, elements and sasa_frac disagree on atom count")
 
         # Distances are accumulated in row blocks rather than as one N x N
         # matrix. A 2000-atom protein would otherwise need a 92 MB (N, N, 3)
@@ -135,7 +148,8 @@ class ScatteringTables:
         # short of memory that allocation fails intermittently -- killing the
         # interpreter rather than raising MemoryError. Blocking keeps the peak
         # near 5 MB and costs nothing in accuracy; the histograms are identical.
-        limit = _max_distance(xyz, chunk) + bin_width if r_max is None else r_max + bin_width
+        limit = (_max_distance(xyz, chunk) + bin_width if r_max is None
+                 else r_max + bin_width)
         edges = np.arange(0.0, limit, bin_width)
         centres = 0.5 * (edges[:-1] + edges[1:])
         nbins = centres.size
@@ -204,7 +218,7 @@ class ScatteringTables:
                    sasa_sasa=sasa_sasa, n_atoms=n)
 
     @classmethod
-    def average(cls, tables: list["ScatteringTables"]) -> "ScatteringTables":
+    def average(cls, tables: list[ScatteringTables]) -> ScatteringTables:
         """Ensemble-average a set of tables built on identical binning.
 
         At fixed c1 and c2 the intensity is linear in these histograms, so the
@@ -216,7 +230,8 @@ class ScatteringTables:
             raise ValueError("no tables to average")
         ref = tables[0]
         if any(t.r.shape != ref.r.shape for t in tables):
-            raise ValueError("tables were built with different binning; pass a common r_max")
+            raise ValueError(
+                "tables were built with different binning; pass a common r_max")
         n = float(len(tables))
 
         keys = set().union(*(set(t.pair) for t in tables))
@@ -224,7 +239,8 @@ class ScatteringTables:
         ekeys = set().union(*(set(t.elem_sasa) for t in tables))
         elem = {k: sum(t.elem_sasa.get(k, 0.0) for t in tables) / n for k in ekeys}
         ss = sum(t.sasa_sasa for t in tables) / n
-        return cls(r=ref.r, pair=pair, elem_sasa=elem, sasa_sasa=ss, n_atoms=ref.n_atoms)
+        return cls(r=ref.r, pair=pair, elem_sasa=elem, sasa_sasa=ss,
+                   n_atoms=ref.n_atoms)
 
     def sinc_matrix(self, q: np.ndarray) -> np.ndarray:
         """sinc(q r) for every (q, bin) pair; the only O(nq * nbins) step."""
@@ -477,7 +493,7 @@ class SaxsFit:
     # The geometry the fit was computed from, kept so real-space quantities
     # can be derived without rebuilding it. For an ensemble fit this is the
     # averaged tables, which is otherwise not recoverable from the caller.
-    tables: "ScatteringTables | None" = None
+    tables: ScatteringTables | None = None
 
     def __repr__(self) -> str:
         return (f"SaxsFit(chi2={self.chi2:.3f}, scale={self.scale:.4g}, "
