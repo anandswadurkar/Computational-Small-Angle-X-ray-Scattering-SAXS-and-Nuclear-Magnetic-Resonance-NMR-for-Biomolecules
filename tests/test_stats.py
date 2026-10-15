@@ -59,8 +59,7 @@ def test_correlated_data_inflates_the_error_bar():
     """
     stats = block_average(ar1(20000, 0.9, seed=2))
     assert stats.sem > stats.naive_sem
-    np.testing.assert_allclose(stats.inflation, np.sqrt(2 * tau_exact(0.9)),
-                               rtol=0.3)
+    np.testing.assert_allclose(stats.inflation, np.sqrt(2 * tau_exact(0.9)), rtol=0.3)
     assert stats.n_effective < stats.n_samples / 10
 
 
@@ -89,8 +88,7 @@ def test_equilibration_is_detected_and_discarded():
 def test_a_drifting_series_is_reported_as_unconverged():
     """A mean taken from a drifting series describes no particular state."""
     n = 2000
-    drifting = np.linspace(0, 6, n) + np.random.default_rng(5).normal(
-        scale=0.1, size=n)
+    drifting = np.linspace(0, 6, n) + np.random.default_rng(5).normal(scale=0.1, size=n)
     report = assess_convergence(drifting, "Rg")
     assert not report.converged
     assert "drifts" in report.reason

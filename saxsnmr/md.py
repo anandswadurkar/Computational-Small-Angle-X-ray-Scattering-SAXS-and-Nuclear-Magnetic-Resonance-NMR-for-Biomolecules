@@ -19,8 +19,14 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["MDResult", "PreparedStructure", "benchmark", "prepare",
-           "run_md", "sanitise_pdb"]
+__all__ = [
+    "MDResult",
+    "PreparedStructure",
+    "benchmark",
+    "prepare",
+    "run_md",
+    "sanitise_pdb",
+]
 
 
 @dataclass
@@ -33,8 +39,12 @@ class PreparedStructure:
     sequence: str
 
 
-def sanitise_pdb(pdb_path: str | Path, out_path: str | Path,
-                 chain: str | None = None, altloc: str = "A") -> dict[str, int]:
+def sanitise_pdb(
+    pdb_path: str | Path,
+    out_path: str | Path,
+    chain: str | None = None,
+    altloc: str = "A",
+) -> dict[str, int]:
     """Reduce a deposited PDB to something a force field can accept.
 
     Three things in real deposited files break downstream tools, all of them
@@ -61,8 +71,13 @@ def sanitise_pdb(pdb_path: str | Path, out_path: str | Path,
     Returns a count of what was dropped so callers can report it.
     """
     src = Path(pdb_path).read_text(errors="replace").splitlines()
-    stats = {"kept": 0, "hydrogens": 0, "altloc": 0, "other_chain": 0,
-             "other_chain_records": 0}
+    stats = {
+        "kept": 0,
+        "hydrogens": 0,
+        "altloc": 0,
+        "other_chain": 0,
+        "other_chain_records": 0,
+    }
     out: list[str] = []
     seen_atom = False
 
@@ -101,7 +116,8 @@ def sanitise_pdb(pdb_path: str | Path, out_path: str | Path,
             # Columns 16 and 30 hold the two partner chains; a disulfide to a
             # chain that is gone would be a dangling restraint.
             if chain is not None and any(
-                    chain_of(line, c) not in (None, chain) for c in (15, 29)):
+                chain_of(line, c) not in (None, chain) for c in (15, 29)
+            ):
                 stats["other_chain_records"] += 1
                 continue
             out.append(line)
@@ -113,9 +129,14 @@ def sanitise_pdb(pdb_path: str | Path, out_path: str | Path,
     return stats
 
 
-def prepare(pdb_path: str | Path, out_path: str | Path, chain: str | None = None,
-            mutations: list[str] | None = None, ph: float = 7.0,
-            keep_heterogens: bool = False) -> PreparedStructure:
+def prepare(
+    pdb_path: str | Path,
+    out_path: str | Path,
+    chain: str | None = None,
+    mutations: list[str] | None = None,
+    ph: float = 7.0,
+    keep_heterogens: bool = False,
+) -> PreparedStructure:
     """Clean a PDB for simulation: one chain, no solvent, complete, protonated.
 
     ``mutations`` uses PDBFixer's notation, e.g. ``["ALA-57-GLY"]`` meaning
@@ -172,17 +193,27 @@ class MDResult:
     ns_per_day: float
 
     def __repr__(self) -> str:
-        return (f"MDResult({self.n_frames} frames, {self.simulated_ps:.0f} ps, "
-                f"{self.platform}, {self.ns_per_day:.2f} ns/day)")
+        return (
+            f"MDResult({self.n_frames} frames, {self.simulated_ps:.0f} ps, "
+            f"{self.platform}, {self.ns_per_day:.2f} ns/day)"
+        )
 
 
-def run_md(prepared: PreparedStructure, out_dir: str | Path,
-           production_ps: float = 50.0, equilibration_ps: float = 5.0,
-           frame_interval_ps: float = 1.0, temperature_K: float = 300.0,
-           timestep_fs: float = 4.0, implicit: str = "implicit/gbn2.xml",
-           cutoff_nm: float = 1.0, hydrogen_mass_amu: float = 4.0,
-           platform: str | None = None, threads: int | None = None,
-           seed: int = 0) -> MDResult:
+def run_md(
+    prepared: PreparedStructure,
+    out_dir: str | Path,
+    production_ps: float = 50.0,
+    equilibration_ps: float = 5.0,
+    frame_interval_ps: float = 1.0,
+    temperature_K: float = 300.0,
+    timestep_fs: float = 4.0,
+    implicit: str = "implicit/gbn2.xml",
+    cutoff_nm: float = 1.0,
+    hydrogen_mass_amu: float = 4.0,
+    platform: str | None = None,
+    threads: int | None = None,
+    seed: int = 0,
+) -> MDResult:
     """Minimise, equilibrate, then run production MD in implicit solvent.
 
     The defaults were chosen by measurement on a laptop CPU, where they give
@@ -225,8 +256,10 @@ def run_md(prepared: PreparedStructure, out_dir: str | Path,
     )
 
     integrator = mm.LangevinMiddleIntegrator(
-        temperature_K * unit.kelvin, 1.0 / unit.picosecond,
-        timestep_fs * unit.femtosecond)
+        temperature_K * unit.kelvin,
+        1.0 / unit.picosecond,
+        timestep_fs * unit.femtosecond,
+    )
     integrator.setRandomNumberSeed(seed)
 
     plat = mm.Platform.getPlatformByName(platform) if platform else None
@@ -264,8 +297,9 @@ def run_md(prepared: PreparedStructure, out_dir: str | Path,
     )
 
 
-def benchmark(prepared: PreparedStructure, ps: float = 10.0,
-              platforms: list[str] | None = None) -> dict[str, float]:
+def benchmark(
+    prepared: PreparedStructure, ps: float = 10.0, platforms: list[str] | None = None
+) -> dict[str, float]:
     """Measure ns/day for each available platform.
 
     Worth running once before planning anything: throughput on an integrated
@@ -277,15 +311,23 @@ def benchmark(prepared: PreparedStructure, ps: float = 10.0,
     import openmm as mm
 
     if platforms is None:
-        platforms = [mm.Platform.getPlatform(i).getName()
-                     for i in range(mm.Platform.getNumPlatforms())]
+        platforms = [
+            mm.Platform.getPlatform(i).getName()
+            for i in range(mm.Platform.getNumPlatforms())
+        ]
 
     results: dict[str, float] = {}
     for name in platforms:
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                res = run_md(prepared, tmp, production_ps=ps, equilibration_ps=2.0,
-                             frame_interval_ps=ps, platform=name)
+                res = run_md(
+                    prepared,
+                    tmp,
+                    production_ps=ps,
+                    equilibration_ps=2.0,
+                    frame_interval_ps=ps,
+                    platform=name,
+                )
             results[name] = res.ns_per_day
         except Exception as exc:
             results[name] = float("nan")
@@ -294,10 +336,30 @@ def benchmark(prepared: PreparedStructure, ps: float = 10.0,
 
 
 _AA3_TO_1 = {
-    "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C", "GLN": "Q",
-    "GLU": "E", "GLY": "G", "HIS": "H", "ILE": "I", "LEU": "L", "LYS": "K",
-    "MET": "M", "PHE": "F", "PRO": "P", "SER": "S", "THR": "T", "TRP": "W",
-    "TYR": "Y", "VAL": "V", "HID": "H", "HIE": "H", "HIP": "H", "CYX": "C",
+    "ALA": "A",
+    "ARG": "R",
+    "ASN": "N",
+    "ASP": "D",
+    "CYS": "C",
+    "GLN": "Q",
+    "GLU": "E",
+    "GLY": "G",
+    "HIS": "H",
+    "ILE": "I",
+    "LEU": "L",
+    "LYS": "K",
+    "MET": "M",
+    "PHE": "F",
+    "PRO": "P",
+    "SER": "S",
+    "THR": "T",
+    "TRP": "W",
+    "TYR": "Y",
+    "VAL": "V",
+    "HID": "H",
+    "HIE": "H",
+    "HIP": "H",
+    "CYX": "C",
 }
 
 

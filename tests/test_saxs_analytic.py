@@ -27,7 +27,7 @@ def sphere_points(n: int, radius_A: float, seed: int = 0) -> np.ndarray:
     out = np.empty((0, 3))
     while len(out) < n:
         batch = rng.uniform(-radius_A, radius_A, size=(4 * n, 3))
-        inside = batch[(batch ** 2).sum(axis=1) <= radius_A ** 2]
+        inside = batch[(batch**2).sum(axis=1) <= radius_A**2]
         out = np.vstack([out, inside])
     return out[:n]
 
@@ -41,7 +41,7 @@ def sphere_form_factor(q: np.ndarray, radius_A: float) -> np.ndarray:
     f = np.ones_like(qr)
     nz = qr > 1e-9
     f[nz] = 3.0 * (np.sin(qr[nz]) - qr[nz] * np.cos(qr[nz])) / qr[nz] ** 3
-    return f ** 2
+    return f**2
 
 
 def uniform_tables(xyz: np.ndarray, bin_width: float = 0.5) -> ScatteringTables:
@@ -52,7 +52,8 @@ def uniform_tables(xyz: np.ndarray, bin_width: float = 0.5) -> ScatteringTables:
     """
     n = len(xyz)
     return ScatteringTables.from_coordinates(
-        xyz, ["C"] * n, np.zeros(n), bin_width=bin_width, alphabet=("C",))
+        xyz, ["C"] * n, np.zeros(n), bin_width=bin_width, alphabet=("C",)
+    )
 
 
 def debye_unit_weights(tables: ScatteringTables, q: np.ndarray) -> np.ndarray:
@@ -115,8 +116,8 @@ def test_guinier_flags_a_particle_too_large_for_the_q_range():
     `valid` False rather than being quoted as an Rg.
     """
     q = np.linspace(0.01, 0.05, 40)
-    huge_rg = 300.0                      # qRg is already 3 at the first point
-    decaying = np.exp(-huge_rg ** 2 * q ** 2 / 3.0)
+    huge_rg = 300.0  # qRg is already 3 at the first point
+    decaying = np.exp(-(huge_rg**2) * q**2 / 3.0)
     fit = guinier(q, decaying, None, min_points=8)
     assert not fit.valid
     assert "no window" in fit.note
@@ -140,8 +141,7 @@ def test_scattering_tables_refuse_unknown_elements():
     molecule, which is worse than failing."""
     xyz = sphere_points(50, 10.0)
     with pytest.raises(ValueError, match="no scattering parameters"):
-        ScatteringTables.from_coordinates(
-            xyz, ["C"] * 49 + ["Fe"], np.zeros(50))
+        ScatteringTables.from_coordinates(xyz, ["C"] * 49 + ["Fe"], np.zeros(50))
 
 
 def test_averaging_identical_frames_is_a_no_op(sphere):

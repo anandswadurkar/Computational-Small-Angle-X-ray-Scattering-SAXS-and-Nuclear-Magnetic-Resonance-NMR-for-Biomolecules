@@ -46,9 +46,10 @@ def test_mcc_is_negative_when_predictions_are_anticorrelated():
 
 def _comparison(csi_labels, dssp_labels):
     resids = np.arange(1, len(csi_labels) + 1)
-    table = pd.DataFrame({"resid": resids, "csi": list(csi_labels),
-                          "d_diff": np.zeros(len(csi_labels))})
-    dssp = np.array([list(dssp_labels)])          # one frame
+    table = pd.DataFrame(
+        {"resid": resids, "csi": list(csi_labels), "d_diff": np.zeros(len(csi_labels))}
+    )
+    dssp = np.array([list(dssp_labels)])  # one frame
     return compare_to_dssp(table, dssp, resids)
 
 
@@ -85,16 +86,20 @@ def test_csi_threshold_is_on_the_difference_index_scale():
     band is a sliver and almost everything is forced into H or E.
     """
     assert 1.4 <= CSI_THRESHOLD <= 2.5, (
-        "a threshold near 0.7 belongs to the single-index convention")
+        "a threshold near 0.7 belongs to the single-index convention"
+    )
 
 
 def test_csi_assignment_respects_its_threshold():
-    sec = pd.DataFrame({
-        "resid": [1, 2, 3, 4],
-        "resname": ["ALA"] * 4,
-        "d_ca": [0.0] * 4, "d_cb": [0.0] * 4,
-        "d_diff": [5.0, -5.0, 0.0, np.nan],
-    })
+    sec = pd.DataFrame(
+        {
+            "resid": [1, 2, 3, 4],
+            "resname": ["ALA"] * 4,
+            "d_ca": [0.0] * 4,
+            "d_cb": [0.0] * 4,
+            "d_diff": [5.0, -5.0, 0.0, np.nan],
+        }
+    )
     labels = csi_assignment(sec)["csi"].tolist()
     assert labels == ["H", "E", "C", "-"]
 
@@ -102,16 +107,20 @@ def test_csi_assignment_respects_its_threshold():
 def test_a_narrow_threshold_starves_the_coil_class():
     """Demonstrates the original bug rather than merely asserting the fix."""
     rng = np.random.default_rng(0)
-    sec = pd.DataFrame({
-        "resid": np.arange(200),
-        "resname": ["ALA"] * 200,
-        "d_ca": np.zeros(200), "d_cb": np.zeros(200),
-        "d_diff": rng.normal(scale=4.6, size=200),   # measured spread
-    })
+    sec = pd.DataFrame(
+        {
+            "resid": np.arange(200),
+            "resname": ["ALA"] * 200,
+            "d_ca": np.zeros(200),
+            "d_cb": np.zeros(200),
+            "d_diff": rng.normal(scale=4.6, size=200),  # measured spread
+        }
+    )
     narrow = csi_assignment(sec, threshold=0.7)["csi"].value_counts()
     correct = csi_assignment(sec, threshold=1.75)["csi"].value_counts()
     assert narrow.get("C", 0) < correct.get("C", 0), (
-        "the narrow threshold must assign fewer coil residues")
+        "the narrow threshold must assign fewer coil residues"
+    )
     assert narrow.get("C", 0) / 200 < 0.15, "coil band should be a sliver at 0.7"
 
 

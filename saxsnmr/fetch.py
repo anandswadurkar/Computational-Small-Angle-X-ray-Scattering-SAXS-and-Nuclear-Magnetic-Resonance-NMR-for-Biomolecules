@@ -87,15 +87,17 @@ class Pddf:
         total = self.p.sum()
         if total <= 0:
             return float("nan")
-        return float(np.sqrt((self.r ** 2 * self.p).sum() / (2.0 * total)))
+        return float(np.sqrt((self.r**2 * self.p).sum() / (2.0 * total)))
 
     def normalised(self) -> np.ndarray:
         peak = self.p.max()
         return self.p / peak if peak > 0 else self.p
 
     def __repr__(self) -> str:
-        return (f"Pddf({self.code}, n={self.r.size}, "
-                f"Dmax={self.dmax:.1f} A, Rg={self.rg:.2f} A)")
+        return (
+            f"Pddf({self.code}, n={self.r.size}, "
+            f"Dmax={self.dmax:.1f} A, Rg={self.rg:.2f} A)"
+        )
 
 
 @dataclass
@@ -145,8 +147,10 @@ class SaxsCurve:
 
     def __repr__(self) -> str:
         lo, hi = self.q_range
-        return (f"SaxsCurve({self.code}, n={self.q.size}, "
-                f"q={lo:.4f}-{hi:.3f} 1/A, from {self.original_unit})")
+        return (
+            f"SaxsCurve({self.code}, n={self.q.size}, "
+            f"q={lo:.4f}-{hi:.3f} 1/A, from {self.original_unit})"
+        )
 
 
 @dataclass
@@ -218,13 +222,16 @@ class Fetcher:
         returns HTTP 500 -- so this parses the HTML result page. It is the most
         fragile call in the module and will break if SASBDB restyles its site.
         """
-        html = self._cached(f"sasbdb_search_{_slug(term)}.html",
-                            f"{SASBDB}/search/?q={requests.utils.quote(term)}")
+        html = self._cached(
+            f"sasbdb_search_{_slug(term)}.html",
+            f"{SASBDB}/search/?q={requests.utils.quote(term)}",
+        )
         return sorted(set(re.findall(r"SASD[A-Z]{2}\d", html)))
 
     def sasbdb_entry(self, code: str) -> dict:
-        txt = self._cached(f"sasbdb_{code}.json",
-                           f"{SASBDB}/rest-api/entry/summary/{code}/")
+        txt = self._cached(
+            f"sasbdb_{code}.json", f"{SASBDB}/rest-api/entry/summary/{code}/"
+        )
         return json.loads(txt)
 
     def constructs(self, code: str) -> list[Construct]:
@@ -233,13 +240,15 @@ class Fetcher:
         mols = sample.get("molecule", []) or []
         out = []
         for m in mols:
-            out.append(Construct(
-                name=m.get("name") or m.get("molecule_name"),
-                molecular_type=m.get("molecular_type"),
-                organism=m.get("organism"),
-                uniprot=(m.get("uniprot_code") or None),
-                sequence=m.get("sequence"),
-            ))
+            out.append(
+                Construct(
+                    name=m.get("name") or m.get("molecule_name"),
+                    molecular_type=m.get("molecular_type"),
+                    organism=m.get("organism"),
+                    uniprot=(m.get("uniprot_code") or None),
+                    sequence=m.get("sequence"),
+                )
+            )
         return out
 
     def sasbdb_curve(self, code: str) -> SaxsCurve:
@@ -253,8 +262,9 @@ class Fetcher:
                 "-- inferring units from magnitude silently corrupts q by 10x."
             )
 
-        text = self._cached(f"sasbdb_{code}.dat",
-                            f"{SASBDB}/media/intensities_files/{code}.dat")
+        text = self._cached(
+            f"sasbdb_{code}.dat", f"{SASBDB}/media/intensities_files/{code}.dat"
+        )
         q, i, s = [], [], []
         for line in text.splitlines():
             parts = line.split()
@@ -310,7 +320,8 @@ class Fetcher:
         if q_scale is None:
             raise ValueError(
                 f"{code}: unrecognised angular_unit {declared!r}; refusing to "
-                "guess the P(r) length unit.")
+                "guess the P(r) length unit."
+            )
         # q in 1/nm means lengths in nm, so r must be multiplied by 10.
         r_scale = 1.0 / q_scale if q_scale != 1.0 else 1.0
 
@@ -329,10 +340,10 @@ class Fetcher:
         for line in lines[start:]:
             parts = line.split()
             if not parts:
-                continue           # blank lines separate nothing here
+                continue  # blank lines separate nothing here
             if len(parts) != 3:
                 if r:
-                    break          # a real trailing section
+                    break  # a real trailing section
                 continue
             try:
                 vals = [float(x) for x in parts]
@@ -347,8 +358,13 @@ class Fetcher:
         if len(r) < 3:
             raise ValueError(f"{code}: parsed only {len(r)} P(r) points")
 
-        pddf = Pddf(code=code, r=np.asarray(r) * r_scale, p=np.asarray(p),
-                    error=np.asarray(err), source=url)
+        pddf = Pddf(
+            code=code,
+            r=np.asarray(r) * r_scale,
+            p=np.asarray(p),
+            error=np.asarray(err),
+            source=url,
+        )
 
         # Cross-check against the entry's own Dmax, which is reported in nm
         # and converted on the way in. Disagreement means the unit inference
@@ -358,7 +374,8 @@ class Fetcher:
             raise ValueError(
                 f"{code}: P(r) ends at {pddf.dmax:.1f} A but the entry reports "
                 f"Dmax {stated:.1f} A. The GNOM file's length unit does not "
-                f"match angular_unit {declared!r}; not guessing.")
+                f"match angular_unit {declared!r}; not guessing."
+            )
         return pddf
 
     # ------------------------------------------------------------- structures
@@ -366,19 +383,25 @@ class Fetcher:
     def best_structures(self, uniprot: str) -> list[StructureHit]:
         """Experimental structures for an accession, best first (PDBe/SIFTS)."""
         try:
-            txt = self._cached(f"pdbe_best_{uniprot}.json",
-                               f"{PDBE}/mappings/best_structures/{uniprot}")
+            txt = self._cached(
+                f"pdbe_best_{uniprot}.json",
+                f"{PDBE}/mappings/best_structures/{uniprot}",
+            )
         except requests.HTTPError:
             return []
         hits = json.loads(txt).get(uniprot, [])
-        return [StructureHit(
-            pdb_id=h["pdb_id"], chain_id=h["chain_id"],
-            resolution=h.get("resolution"),
-            method=h.get("experimental_method"),
-            start=h.get("unp_start") or h.get("start"),
-            end=h.get("unp_end") or h.get("end"),
-            coverage=h.get("coverage"),
-        ) for h in hits]
+        return [
+            StructureHit(
+                pdb_id=h["pdb_id"],
+                chain_id=h["chain_id"],
+                resolution=h.get("resolution"),
+                method=h.get("experimental_method"),
+                start=h.get("unp_start") or h.get("start"),
+                end=h.get("unp_end") or h.get("end"),
+                coverage=h.get("coverage"),
+            )
+            for h in hits
+        ]
 
     def pdb_file(self, pdb_id: str) -> Path:
         key = f"{pdb_id.lower()}.pdb"
@@ -425,7 +448,8 @@ class Fetcher:
 
         txt = self._cached(
             f"bmrb_{bmrb_id}_cs.json",
-            f"{BMRB_API}/entry/{bmrb_id}?saveframe_category=assigned_chemical_shifts")
+            f"{BMRB_API}/entry/{bmrb_id}?saveframe_category=assigned_chemical_shifts",
+        )
         data = json.loads(txt).get(str(bmrb_id), {}).get("assigned_chemical_shifts", [])
         frames = []
         for sf in data:
@@ -439,9 +463,15 @@ class Fetcher:
             return None
 
         df = pd.concat(frames, ignore_index=True)
-        keep = {"Comp_index_ID": "resid", "Seq_ID": "seq_id", "Comp_ID": "resname",
-                "Atom_ID": "atom", "Atom_type": "element", "Val": "shift",
-                "Val_err": "shift_err"}
+        keep = {
+            "Comp_index_ID": "resid",
+            "Seq_ID": "seq_id",
+            "Comp_ID": "resname",
+            "Atom_ID": "atom",
+            "Atom_type": "element",
+            "Val": "shift",
+            "Val_err": "shift_err",
+        }
         df = df[[c for c in keep if c in df.columns]].rename(columns=keep)
         for col in ("resid", "seq_id"):
             if col in df:
@@ -470,18 +500,20 @@ def summarise_constructs(fetcher: Fetcher, codes: Iterable[str]) -> Any:
         try:
             entry = fetcher.sasbdb_entry(code)
             for c in fetcher.constructs(code):
-                rows.append({
-                    "code": code,
-                    "uniprot": c.uniprot,
-                    "type": c.molecular_type,
-                    "organism": c.organism,
-                    "length": c.length,
-                    # Angstrom, like every other length this package returns.
-                    "guinier_rg_A": _nm_to_A(entry.get("guinier_rg")),
-                    "pddf_dmax_A": _nm_to_A(entry.get("pddf_dmax")),
-                    "angular_unit": entry.get("angular_unit"),
-                    "type_of_curve": entry.get("type_of_curve"),
-                })
+                rows.append(
+                    {
+                        "code": code,
+                        "uniprot": c.uniprot,
+                        "type": c.molecular_type,
+                        "organism": c.organism,
+                        "length": c.length,
+                        # Angstrom, like every other length this package returns.
+                        "guinier_rg_A": _nm_to_A(entry.get("guinier_rg")),
+                        "pddf_dmax_A": _nm_to_A(entry.get("pddf_dmax")),
+                        "angular_unit": entry.get("angular_unit"),
+                        "type_of_curve": entry.get("type_of_curve"),
+                    }
+                )
         except Exception as exc:  # a dead entry should not kill the survey
             rows.append({"code": code, "uniprot": f"ERROR: {exc}"})
     return pd.DataFrame(rows)

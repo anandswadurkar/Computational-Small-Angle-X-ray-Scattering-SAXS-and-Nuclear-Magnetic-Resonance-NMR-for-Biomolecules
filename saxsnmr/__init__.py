@@ -44,20 +44,25 @@ def _repair_windows_dll_path() -> list[str]:
         return []
 
     prefix = Path(_sys.executable).parent
-    if (not (prefix / "conda-meta").is_dir()
-            and not (prefix.parent / "conda-meta").is_dir()):
-        return []                      # not a conda environment; leave PATH alone
+    if (
+        not (prefix / "conda-meta").is_dir()
+        and not (prefix.parent / "conda-meta").is_dir()
+    ):
+        return []  # not a conda environment; leave PATH alone
 
-    candidates = [prefix,
-                  prefix / "Library" / "mingw-w64" / "bin",
-                  prefix / "Library" / "usr" / "bin",
-                  prefix / "Library" / "bin",
-                  prefix / "Scripts",
-                  prefix / "bin"]
+    candidates = [
+        prefix,
+        prefix / "Library" / "mingw-w64" / "bin",
+        prefix / "Library" / "usr" / "bin",
+        prefix / "Library" / "bin",
+        prefix / "Scripts",
+        prefix / "bin",
+    ]
     current = _os.environ.get("PATH", "")
     present = {p.lower() for p in current.split(_os.pathsep) if p}
-    missing = [str(d) for d in candidates
-               if d.is_dir() and str(d).lower() not in present]
+    missing = [
+        str(d) for d in candidates if d.is_dir() and str(d).lower() not in present
+    ]
     if missing:
         _os.environ["PATH"] = _os.pathsep.join(missing + ([current] if current else []))
     return missing
@@ -220,13 +225,15 @@ def _elements_and_sasa(traj, frame: int):
     return elements, np.asarray(frac)
 
 
-def frame_tables(traj, frame: int, bin_width: float = 0.25,
-                 r_max: float | None = None) -> ScatteringTables:
+def frame_tables(
+    traj, frame: int, bin_width: float = 0.25, r_max: float | None = None
+) -> ScatteringTables:
     """Scattering tables for one trajectory frame (coordinates in angstrom)."""
     elements, frac = _elements_and_sasa(traj, frame)
     xyz = traj.xyz[frame] * 10.0
-    return ScatteringTables.from_coordinates(xyz, elements, frac,
-                                             bin_width=bin_width, r_max=r_max)
+    return ScatteringTables.from_coordinates(
+        xyz, elements, frac, bin_width=bin_width, r_max=r_max
+    )
 
 
 def radius_of_gyration(traj) -> np.ndarray:
@@ -236,9 +243,13 @@ def radius_of_gyration(traj) -> np.ndarray:
     return md.compute_rg(traj) * 10.0
 
 
-def ensemble_fit(md_result: MDResult | object, curve: SaxsCurve,
-                 stride: int = 1, max_frames: int | None = None,
-                 bin_width: float = 0.25) -> SaxsFit:
+def ensemble_fit(
+    md_result: MDResult | object,
+    curve: SaxsCurve,
+    stride: int = 1,
+    max_frames: int | None = None,
+    bin_width: float = 0.25,
+) -> SaxsFit:
     """Average I(q) over trajectory frames, then fit scale, c1 and c2 once.
 
     Averaging intensities before fitting (rather than fitting each frame) is the

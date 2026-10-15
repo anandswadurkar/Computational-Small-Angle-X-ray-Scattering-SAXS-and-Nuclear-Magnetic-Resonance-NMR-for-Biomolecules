@@ -82,12 +82,14 @@ def test_weights_refuse_impossible_deuteration(bad):
 # the histogramming together.
 # ---------------------------------------------------------------------------
 
+
 def _toy_molecule(n: int = 400, seed: int = 0):
     """A point cloud with a realistic mix of the neutron atom classes."""
     rng = np.random.default_rng(seed)
     xyz = rng.normal(scale=9.0, size=(n, 3))
-    labels = rng.choice(["H", "Hx", "C", "N", "O"], size=n,
-                        p=[0.38, 0.14, 0.30, 0.09, 0.09]).tolist()
+    labels = rng.choice(
+        ["H", "Hx", "C", "N", "O"], size=n, p=[0.38, 0.14, 0.30, 0.09, 0.09]
+    ).tolist()
     return xyz, labels
 
 
@@ -99,20 +101,20 @@ def _weighted_rg(xyz, labels, d2o, dprot=0.0):
     return float(np.sqrt((w * ((xyz - centre) ** 2).sum(axis=1)).sum() / total))
 
 
-@pytest.mark.parametrize("d2o,dprot", [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0),
-                                       (0.2, 0.5)])
+@pytest.mark.parametrize("d2o,dprot", [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.2, 0.5)])
 def test_guinier_limit_matches_the_analytic_weighted_rg(d2o, dprot):
     from saxsnmr.sans import SANS_ALPHABET, sans_profile
     from saxsnmr.saxs import ScatteringTables, guinier
 
     xyz, labels = _toy_molecule()
     tables = ScatteringTables.from_coordinates(
-        xyz, labels, np.zeros(len(labels)), bin_width=0.25,
-        alphabet=SANS_ALPHABET)
+        xyz, labels, np.zeros(len(labels)), bin_width=0.25, alphabet=SANS_ALPHABET
+    )
     analytic = _weighted_rg(xyz, labels, d2o, dprot)
     q = np.linspace(0.002, 0.9 / analytic, 140)
-    fit = guinier(q, sans_profile(tables, q, d2o, protein_deuteration=dprot),
-                  None, min_points=30)
+    fit = guinier(
+        q, sans_profile(tables, q, d2o, protein_deuteration=dprot), None, min_points=30
+    )
     np.testing.assert_allclose(fit.rg, analytic, rtol=0.03)
 
 
@@ -123,7 +125,8 @@ def test_contrast_vanishes_somewhere_between_the_two_solvents():
 
     xyz, labels = _toy_molecule()
     tables = ScatteringTables.from_coordinates(
-        xyz, labels, np.zeros(len(labels)), alphabet=SANS_ALPHABET)
+        xyz, labels, np.zeros(len(labels)), alphabet=SANS_ALPHABET
+    )
     mp = match_point_d2o(tables)
     assert 0.2 < mp < 0.8, f"match point {mp:.2f} is not physical"
 
@@ -144,7 +147,8 @@ def test_perdeuterated_protein_has_no_match_point():
 
     xyz, labels = _toy_molecule()
     tables = ScatteringTables.from_coordinates(
-        xyz, labels, np.zeros(len(labels)), alphabet=SANS_ALPHABET)
+        xyz, labels, np.zeros(len(labels)), alphabet=SANS_ALPHABET
+    )
     assert np.isfinite(match_point_d2o(tables, protein_deuteration=0.0))
     assert not np.isfinite(match_point_d2o(tables, protein_deuteration=1.0))
 
@@ -160,7 +164,8 @@ def test_fitted_background_is_never_negative():
 
     xyz, labels = _toy_molecule()
     tables = ScatteringTables.from_coordinates(
-        xyz, labels, np.zeros(len(labels)), alphabet=SANS_ALPHABET)
+        xyz, labels, np.zeros(len(labels)), alphabet=SANS_ALPHABET
+    )
     q = np.linspace(0.01, 0.3, 80)
     truth = sans_profile(tables, q, 1.0)
     # Data sitting *below* the model is what tempts the fit to go negative.

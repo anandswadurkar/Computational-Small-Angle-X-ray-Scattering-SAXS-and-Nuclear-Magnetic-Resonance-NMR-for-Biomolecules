@@ -69,12 +69,19 @@ NEUTRON_B = {
 
 # Incoherent cross sections, barn. Only hydrogen matters; everything else is
 # negligible by comparison, which is why protonated buffers are so noisy.
-INCOHERENT_BARN = {"H": 80.27, "D": 2.05, "C": 0.001, "N": 0.50,
-                   "O": 0.0008, "P": 0.005, "S": 0.007}
+INCOHERENT_BARN = {
+    "H": 80.27,
+    "D": 2.05,
+    "C": 0.001,
+    "N": 0.50,
+    "O": 0.0008,
+    "P": 0.005,
+    "S": 0.007,
+}
 
 SANS_ALPHABET = ("H", "Hx", "C", "N", "O", "P", "S")
 
-V_WATER = 30.0          # A^3 per water molecule, as in the X-ray model
+V_WATER = 30.0  # A^3 per water molecule, as in the X-ray model
 
 # Scattering length densities of the two solvents, fm per A^3.
 SLD_H2O = (2 * NEUTRON_B["H"] + NEUTRON_B["O"]) / V_WATER
@@ -99,8 +106,7 @@ def _b_exchangeable(d2o_fraction: float) -> float:
     do, so this overstates deuteration for a folded protein -- the usual
     correction is an empirical exchange factor, which is not applied here.
     """
-    return ((1.0 - d2o_fraction) * NEUTRON_B["H"]
-            + d2o_fraction * NEUTRON_B["D"])
+    return (1.0 - d2o_fraction) * NEUTRON_B["H"] + d2o_fraction * NEUTRON_B["D"]
 
 
 def exchangeable_hydrogens(topology) -> np.ndarray:
@@ -137,8 +143,9 @@ def sans_elements(topology) -> list[str]:
     return out
 
 
-def sans_tables(traj, frame: int = 0, bin_width: float = 0.25,
-                r_max: float | None = None) -> ScatteringTables:
+def sans_tables(
+    traj, frame: int = 0, bin_width: float = 0.25, r_max: float | None = None
+) -> ScatteringTables:
     """Distance histograms over the neutron alphabet for one frame.
 
     Separate from ``frame_tables`` because the alphabet differs: hydrogen is
@@ -150,23 +157,28 @@ def sans_tables(traj, frame: int = 0, bin_width: float = 0.25,
     """
     import mdtraj as mdt
 
-    xyz = traj.xyz[frame] * 10.0                     # nm -> Angstrom
+    xyz = traj.xyz[frame] * 10.0  # nm -> Angstrom
     labels = sans_elements(traj.topology)
     sasa = mdt.shrake_rupley(traj[frame], mode="atom")[0]
     # Normalised the same way the X-ray path does, so the stored SASA tables
     # mean the same thing in both.
     from . import _MAX_SASA
-    denom = np.array([_MAX_SASA.get(
-        (a.element.symbol if a.element is not None else ""), 1.0)
-        for a in traj.topology.atoms])
+
+    denom = np.array(
+        [
+            _MAX_SASA.get((a.element.symbol if a.element is not None else ""), 1.0)
+            for a in traj.topology.atoms
+        ]
+    )
     frac = np.clip(sasa / denom, 0.0, 1.0)
     return ScatteringTables.from_coordinates(
-        xyz, labels, frac, bin_width=bin_width, r_max=r_max,
-        alphabet=SANS_ALPHABET)
+        xyz, labels, frac, bin_width=bin_width, r_max=r_max, alphabet=SANS_ALPHABET
+    )
 
 
-def _weights(d2o_fraction: float, c1: float,
-             protein_deuteration: float = 0.0) -> dict[str, float]:
+def _weights(
+    d2o_fraction: float, c1: float, protein_deuteration: float = 0.0
+) -> dict[str, float]:
     """Contrast-weighted scattering length per class, fm.
 
     ``protein_deuteration`` is the fraction of *non-exchangeable* hydrogen
@@ -180,12 +192,14 @@ def _weights(d2o_fraction: float, c1: float,
     they re-equilibrate with the buffer.
     """
     if not 0.0 <= protein_deuteration <= 1.0:
-        raise ValueError("protein_deuteration must be in [0, 1], got "
-                         f"{protein_deuteration}")
+        raise ValueError(
+            f"protein_deuteration must be in [0, 1], got {protein_deuteration}"
+        )
     rho = solvent_sld(d2o_fraction)
     b_hx = _b_exchangeable(d2o_fraction)
-    b_h = ((1.0 - protein_deuteration) * NEUTRON_B["H"]
-           + protein_deuteration * NEUTRON_B["D"])
+    b_h = (1.0 - protein_deuteration) * NEUTRON_B[
+        "H"
+    ] + protein_deuteration * NEUTRON_B["D"]
     out = {}
     for label in SANS_ALPHABET:
         element = "H" if label == "Hx" else label
@@ -199,10 +213,14 @@ def _weights(d2o_fraction: float, c1: float,
     return out
 
 
-def sans_profile(tables: ScatteringTables, q: np.ndarray,
-                 d2o_fraction: float, c1: float = 1.0,
-                 sinc: np.ndarray | None = None,
-                 protein_deuteration: float = 0.0) -> np.ndarray:
+def sans_profile(
+    tables: ScatteringTables,
+    q: np.ndarray,
+    d2o_fraction: float,
+    c1: float = 1.0,
+    sinc: np.ndarray | None = None,
+    protein_deuteration: float = 0.0,
+) -> np.ndarray:
     """I(q) in arbitrary units, excluding the incoherent background.
 
     ``c1`` scales the displaced solvent volume exactly as in the X-ray model.
@@ -219,8 +237,9 @@ def sans_profile(tables: ScatteringTables, q: np.ndarray,
     return intensity
 
 
-def match_point_d2o(tables: ScatteringTables,
-                    protein_deuteration: float = 0.0) -> float:
+def match_point_d2o(
+    tables: ScatteringTables, protein_deuteration: float = 0.0
+) -> float:
     """D2O fraction at which this molecule's mean contrast vanishes.
 
     Solves <b> = rho_s(x) * <V> for x. Near this point the coherent signal is
@@ -249,7 +268,7 @@ def match_point_d2o(tables: ScatteringTables,
 
     lo, hi = 0.0, 1.0
     if net(lo) * net(hi) > 0:
-        return float("nan")          # no sign change: no match point
+        return float("nan")  # no sign change: no match point
     for _ in range(60):
         mid = 0.5 * (lo + hi)
         if net(lo) * net(mid) <= 0:
@@ -263,7 +282,7 @@ def match_point_d2o(tables: ScatteringTables,
 class SansFit:
     chi2: float
     scale: float
-    background: float          # flat incoherent term, >= 0 by construction
+    background: float  # flat incoherent term, >= 0 by construction
     c1: float
     d2o_fraction: float
     protein_deuteration: float
@@ -284,16 +303,23 @@ class SansFit:
         return float(self.background / mean) if mean else float("nan")
 
     def __repr__(self) -> str:
-        return (f"SansFit(chi2={self.chi2:.3f}, scale={self.scale:.4g}, "
-                f"bg={self.background:.4g} ({self.background_fraction:.1%} of "
-                f"mean I), c1={self.c1:.3f}, D2O={self.d2o_fraction:.0%}, "
-                f"dProt={self.protein_deuteration:.0%})")
+        return (
+            f"SansFit(chi2={self.chi2:.3f}, scale={self.scale:.4g}, "
+            f"bg={self.background:.4g} ({self.background_fraction:.1%} of "
+            f"mean I), c1={self.c1:.3f}, D2O={self.d2o_fraction:.0%}, "
+            f"dProt={self.protein_deuteration:.0%})"
+        )
 
 
-def sans_fit(tables: ScatteringTables, q: np.ndarray, i_exp: np.ndarray,
-             sigma: np.ndarray | None, d2o_fraction: float,
-             fit_background: bool = True,
-             protein_deuteration: float = 0.0) -> SansFit:
+def sans_fit(
+    tables: ScatteringTables,
+    q: np.ndarray,
+    i_exp: np.ndarray,
+    sigma: np.ndarray | None,
+    d2o_fraction: float,
+    fit_background: bool = True,
+    protein_deuteration: float = 0.0,
+) -> SansFit:
     """Fit scale, a flat background and c1 to an experimental neutron curve.
 
     The background is not optional in practice. Incoherent scattering from
@@ -313,15 +339,21 @@ def sans_fit(tables: ScatteringTables, q: np.ndarray, i_exp: np.ndarray,
     else:
         sigma = np.asarray(sigma, dtype=np.float64)
         bad = ~np.isfinite(sigma) | (sigma <= 0)
-        if bad.any():                       # repair pointwise, as `fit` does
+        if bad.any():  # repair pointwise, as `fit` does
             good = np.abs(i_exp[~bad]).mean() * 0.05 if (~bad).any() else 1.0
             sigma = np.where(bad, good, sigma)
 
     sinc = tables.sinc_matrix(q)
 
     def model_for(c1: float) -> np.ndarray:
-        return sans_profile(tables, q, d2o_fraction, c1=c1, sinc=sinc,
-                            protein_deuteration=protein_deuteration)
+        return sans_profile(
+            tables,
+            q,
+            d2o_fraction,
+            c1=c1,
+            sinc=sinc,
+            protein_deuteration=protein_deuteration,
+        )
 
     def residual(p):
         c1 = p[0]
@@ -344,8 +376,9 @@ def sans_fit(tables: ScatteringTables, q: np.ndarray, i_exp: np.ndarray,
         residual.coef = coef
         return resid
 
-    sol = least_squares(residual, [1.0], bounds=([0.95], [1.05]),
-                        xtol=1e-10, ftol=1e-10)
+    sol = least_squares(
+        residual, [1.0], bounds=([0.95], [1.05]), xtol=1e-10, ftol=1e-10
+    )
     c1 = float(sol.x[0])
     resid = residual([c1])
     coef = residual.coef
@@ -353,17 +386,30 @@ def sans_fit(tables: ScatteringTables, q: np.ndarray, i_exp: np.ndarray,
     background = float(coef[1]) if fit_background else 0.0
     n_par = 2 + (1 if fit_background else 0)
     dof = max(q.size - n_par, 1)
-    chi2 = float((resid ** 2).sum() / dof)
+    chi2 = float((resid**2).sum() / dof)
     model = scale * model_for(c1) + background
-    return SansFit(chi2=chi2, scale=scale, background=background, c1=c1,
-                   d2o_fraction=d2o_fraction,
-                   protein_deuteration=protein_deuteration, q=q, model=model,
-                   experiment=i_exp, sigma=sigma, tables=tables)
+    return SansFit(
+        chi2=chi2,
+        scale=scale,
+        background=background,
+        c1=c1,
+        d2o_fraction=d2o_fraction,
+        protein_deuteration=protein_deuteration,
+        q=q,
+        model=model,
+        experiment=i_exp,
+        sigma=sigma,
+        tables=tables,
+    )
 
 
-def scattering_weighted_rg(traj, frame: int, d2o_fraction: float,
-                           c1: float = 1.0,
-                           protein_deuteration: float = 0.0) -> float:
+def scattering_weighted_rg(
+    traj,
+    frame: int,
+    d2o_fraction: float,
+    c1: float = 1.0,
+    protein_deuteration: float = 0.0,
+) -> float:
     """Rg weighted by contrast-weighted scattering length, in Angstrom.
 
     **This is not the X-ray Rg.** Rg is a weighted second moment, and the

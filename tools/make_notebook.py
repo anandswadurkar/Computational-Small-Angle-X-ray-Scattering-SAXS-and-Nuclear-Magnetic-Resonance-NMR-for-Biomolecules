@@ -17,6 +17,7 @@ than worked around silently.
 Hand-editing .ipynb JSON is error-prone and its diffs are unreadable, which is
 the whole reason for generating it.
 """
+
 import json
 import sys
 from dataclasses import dataclass, field
@@ -66,23 +67,23 @@ submodules cached and mixes versions, which fails more confusingly than before.
 class System:
     """One reference molecule and everything that differs because of it."""
 
-    index: str                  # notebook number prefix
-    slug: str                   # file name stem after the number
-    name: str                   # full name, for prose
-    short: str                  # short name, used inline
+    index: str  # notebook number prefix
+    slug: str  # file name stem after the number
+    name: str  # full name, for prose
+    short: str  # short name, used inline
     uniprot: str
     sasbdb_code: str
-    search_term: str            # free-text SASBDB search
-    q_max: float                # trim point, 1/A
-    monomer_note: str           # how to spot a non-monomer in the survey
-    structure_note: str         # what preparation has to cope with
-    mutation: str               # PDBFixer notation
-    mutation_label: str         # e.g. "E35Q"
-    mutation_rationale: str     # why this residue
-    why_this_system: str        # opening framing
+    search_term: str  # free-text SASBDB search
+    q_max: float  # trim point, 1/A
+    monomer_note: str  # how to spot a non-monomer in the survey
+    structure_note: str  # what preparation has to cope with
+    mutation: str  # PDBFixer notation
+    mutation_label: str  # e.g. "E35Q"
+    mutation_rationale: str  # why this residue
+    why_this_system: str  # opening framing
     extra_caveats: list = field(default_factory=list)
-    sans_code: str | None = None      # deposited SANS curve, if any
-    sans_d2o: float = 0.0             # D2O fraction of that measurement
+    sans_code: str | None = None  # deposited SANS curve, if any
+    sans_d2o: float = 0.0  # D2O fraction of that measurement
     n_replicas: int = 3
     production_ps: float = 5.0
     equilibration_ps: float = 2.0
@@ -95,64 +96,82 @@ class System:
 
 SYSTEMS = [
     System(
-        index="02", slug="phase1_lysozyme",
-        name="hen egg white lysozyme", short="lysozyme",
-        uniprot="P00698", sasbdb_code="SASDMJ2", search_term="lysozyme",
+        index="02",
+        slug="phase1_lysozyme",
+        name="hen egg white lysozyme",
+        short="lysozyme",
+        uniprot="P00698",
+        sasbdb_code="SASDMJ2",
+        search_term="lysozyme",
         q_max=0.50,
         monomer_note=(
             "Monomeric lysozyme is 129 residues with Rg ~14 A and Dmax ~42 A. "
             "Entries reporting a much larger Rg or Dmax are aggregates or "
             "fibrils rather than the folded monomer, and must not be averaged "
             "together with it. `SASDMJ4` is the clearest example here: it "
-            "reports Rg ~303 A against the monomers' ~14 A."),
+            "reports Rg ~303 A against the monomers' ~14 A."
+        ),
         structure_note=(
             "Lysozyme's best structure, `2vb1` at 0.65 A, needs all three: it "
             "resolves its own hydrogens, carries altloc codes A/B/C, and "
-            "labels two different chains `A`."),
-        mutation="GLU-35-GLN", mutation_label="E35Q",
+            "labels two different chains `A`."
+        ),
+        mutation="GLU-35-GLN",
+        mutation_label="E35Q",
         mutation_rationale=(
             "Glu35 is lysozyme's catalytic general acid. **E35Q** is a classic "
             "inactivating substitution: it removes the charge while keeping "
             "almost exactly the same shape. That makes it a good test of the "
             "method's limits, because a change that drastic for the enzyme's "
             "*function* should be nearly invisible to SAXS, which only sees "
-            "the shape."),
+            "the shape."
+        ),
         why_this_system=(
             "Lysozyme is the regression target because it is exhaustively "
             "characterised. If the harness cannot reproduce lysozyme, nothing "
-            "else it reports is trustworthy."),
+            "else it reports is trustworthy."
+        ),
     ),
     System(
-        index="03", slug="phase1_rnase_a",
-        name="bovine pancreatic ribonuclease A", short="RNase A",
-        uniprot="P61823", sasbdb_code="SASDPF7", search_term="ribonuclease",
+        index="03",
+        slug="phase1_rnase_a",
+        name="bovine pancreatic ribonuclease A",
+        short="RNase A",
+        uniprot="P61823",
+        sasbdb_code="SASDPF7",
+        search_term="ribonuclease",
         q_max=0.50,
         monomer_note=(
             "Monomeric RNase A is 124 residues with Rg ~15 A and Dmax ~46 A. "
             "The entries here were collected by SEC-SAXS, where the sample is "
             "separated immediately before measurement, so aggregates are far "
             "less of a concern than in a batch experiment -- the four entries "
-            "agree on Rg to within 0.2 A."),
+            "agree on Rg to within 0.2 A."
+        ),
         structure_note=(
             "RNase A's best structure, `6etk` at 0.85 A, is comparable to "
             "lysozyme's reference: high enough resolution to carry its own "
             "hydrogens and alternate conformations. It has four disulfides, "
-            "which the force field handles but which make the fold stiff."),
-        mutation="HIS-12-ALA", mutation_label="H12A",
+            "which the force field handles but which make the fold stiff."
+        ),
+        mutation="HIS-12-ALA",
+        mutation_label="H12A",
         mutation_rationale=(
             "His12 and His119 are RNase A's catalytic pair, acting as general "
             "base and general acid. **H12A** abolishes activity. Like E35Q in "
             "lysozyme it is a chemical change rather than a shape change, so "
             "SAXS should not see it -- but unlike E35Q it removes a side chain "
             "rather than swapping one, so PDBFixer's rebuilt rotamer matters "
-            "even less."),
+            "even less."
+        ),
         why_this_system=(
             "RNase A is the closest available analogue to lysozyme: a small, "
             "rigid, exhaustively studied enzyme with a sub-Angstrom structure. "
             "It exists here to answer whether the lysozyme result is a "
             "property of lysozyme or of the method. A conclusion that holds "
             "for one protein and not the other is a different kind of finding "
-            "from one that holds for both."),
+            "from one that holds for both."
+        ),
         extra_caveats=[
             "The deposited curve is in 1/nm, not 1/A. The loader converts it "
             "from the `angular_unit` field, and the deposited P(r) is "
@@ -161,34 +180,43 @@ SYSTEMS = [
         ],
     ),
     System(
-        index="04", slug="phase1_cytochrome_c",
-        name="equine heart cytochrome c", short="cytochrome c",
-        uniprot="P00004", sasbdb_code="SASDAB2", search_term="cytochrome c",
+        index="04",
+        slug="phase1_cytochrome_c",
+        name="equine heart cytochrome c",
+        short="cytochrome c",
+        uniprot="P00004",
+        sasbdb_code="SASDAB2",
+        search_term="cytochrome c",
         q_max=0.50,
         monomer_note=(
             "Monomeric cytochrome c is ~104 residues with Rg ~13 A and "
             "Dmax ~37 A. It is the smallest of the three reference systems, "
-            "so its simulations are correspondingly quicker."),
+            "so its simulations are correspondingly quicker."
+        ),
         structure_note=(
             "Cytochrome c's structure is solved as part of a larger assembly, "
             "so the chain of interest is **not the first in the file**. The "
             "chain identifier comes from the PDBe/SIFTS mapping rather than "
             "being assumed, and `sanitise_pdb` has to discard the TER and "
-            "SSBOND records belonging to the chains it drops."),
-        mutation="MET-80-ALA", mutation_label="M80A",
+            "SSBOND records belonging to the chains it drops."
+        ),
+        mutation="MET-80-ALA",
+        mutation_label="M80A",
         mutation_rationale=(
             "Met80 provides the sixth coordination bond to the heme iron, and "
             "**M80A** is the classic substitution for opening that site. Note "
             "the asymmetry with the other two systems: here the mutation's "
             "whole significance is to a cofactor this simulation does not "
             "contain (see the caveat below), so it is being used purely as a "
-            "shape perturbation."),
+            "shape perturbation."
+        ),
         why_this_system=(
             "Cytochrome c is a different fold class from the other two and it "
             "carries a cofactor, which makes it the most honest of the three "
             "about what this pipeline cannot do. It is included because a "
             "harness that only ever sees cofactor-free globular enzymes will "
-            "not warn you when that assumption breaks."),
+            "not warn you when that assumption breaks."
+        ),
         extra_caveats=[
             "**The heme is not simulated.** amber14 has no parameters for "
             "Fe-protoporphyrin IX, and `prepare` strips heterogens, so this "
@@ -218,30 +246,42 @@ class Notebook:
 
     def _fill(self, text: str) -> str:
         s = self.s
-        return (text
-                .replace("__UNIPROT__", s.uniprot)
-                .replace("__CODE__", s.sasbdb_code)
-                .replace("__TERM__", s.search_term)
-                .replace("__NAME__", s.name)
-                .replace("__SHORT__", s.short)
-                .replace("__QMAX__", f"{s.q_max:.2f}")
-                .replace("__MUT__", s.mutation)
-                .replace("__MUTLABEL__", s.mutation_label)
-                .replace("__NREP__", str(s.n_replicas))
-                .replace("__PRODPS__", f"{s.production_ps}")
-                .replace("__EQPS__", f"{s.equilibration_ps}")
-                .replace("__FRAMEPS__", f"{s.frame_interval_ps}"))
+        return (
+            text.replace("__UNIPROT__", s.uniprot)
+            .replace("__CODE__", s.sasbdb_code)
+            .replace("__TERM__", s.search_term)
+            .replace("__NAME__", s.name)
+            .replace("__SHORT__", s.short)
+            .replace("__QMAX__", f"{s.q_max:.2f}")
+            .replace("__MUT__", s.mutation)
+            .replace("__MUTLABEL__", s.mutation_label)
+            .replace("__NREP__", str(s.n_replicas))
+            .replace("__PRODPS__", f"{s.production_ps}")
+            .replace("__EQPS__", f"{s.equilibration_ps}")
+            .replace("__FRAMEPS__", f"{s.frame_interval_ps}")
+        )
 
     def md(self, text):
-        self.cells.append({
-            "cell_type": "markdown", "id": self._id(), "metadata": {},
-            "source": self._fill(text).strip("\n").splitlines(keepends=True)})
+        self.cells.append(
+            {
+                "cell_type": "markdown",
+                "id": self._id(),
+                "metadata": {},
+                "source": self._fill(text).strip("\n").splitlines(keepends=True),
+            }
+        )
 
     def code(self, text):
-        self.cells.append({
-            "cell_type": "code", "id": self._id(), "execution_count": None,
-            "metadata": {}, "outputs": [],
-            "source": self._fill(text).strip("\n").splitlines(keepends=True)})
+        self.cells.append(
+            {
+                "cell_type": "code",
+                "id": self._id(),
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": self._fill(text).strip("\n").splitlines(keepends=True),
+            }
+        )
 
     def write(self):
         # saxsnmr must be imported before numpy or matplotlib, in the notebook
@@ -267,22 +307,34 @@ class Notebook:
                 if first_saxsnmr is None and "saxsnmr" in stripped:
                     first_saxsnmr = (where, stripped)
                 if first_sci is None and any(
-                        stripped.startswith(p) for p in
-                        ("import numpy", "import matplotlib", "from numpy",
-                         "from matplotlib", "import scipy", "from scipy",
-                         "import mdtraj", "from mdtraj", "import pandas")):
+                    stripped.startswith(p)
+                    for p in (
+                        "import numpy",
+                        "import matplotlib",
+                        "from numpy",
+                        "from matplotlib",
+                        "import scipy",
+                        "from scipy",
+                        "import mdtraj",
+                        "from mdtraj",
+                        "import pandas",
+                    )
+                ):
                     first_sci = (where, stripped)
-        if first_sci and (first_saxsnmr is None
-                          or first_sci[0] < first_saxsnmr[0]):
+        if first_sci and (first_saxsnmr is None or first_sci[0] < first_saxsnmr[0]):
             raise RuntimeError(
                 f"{self.s.filename}: {first_sci[1]!r} (cell {first_sci[0][0]}, "
                 f"line {first_sci[0][1] + 1}) comes before importing saxsnmr"
-                + (f" ({first_saxsnmr[1]!r}, cell {first_saxsnmr[0][0]}, "
-                   f"line {first_saxsnmr[0][1] + 1})"
-                   if first_saxsnmr else " (never imported)")
+                + (
+                    f" ({first_saxsnmr[1]!r}, cell {first_saxsnmr[0][0]}, "
+                    f"line {first_saxsnmr[0][1] + 1})"
+                    if first_saxsnmr
+                    else " (never imported)"
+                )
                 + ".\nsaxsnmr repairs PATH for the conda environment's "
-                  "compiled libraries. Importing NumPy first binds BLAS "
-                  "before the repair and the kernel dies with no traceback.")
+                "compiled libraries. Importing NumPy first binds BLAS "
+                "before the repair and the kernel dies with no traceback."
+            )
 
         # Compile every code cell before writing. The cell sources are built
         # by string substitution into templates, and a mangled escape yields
@@ -298,14 +350,22 @@ class Notebook:
             except SyntaxError as exc:
                 raise SyntaxError(
                     f"{self.s.filename} cell {n} does not compile: {exc}\n"
-                    f"--- cell source ---\n{src}") from exc
+                    f"--- cell source ---\n{src}"
+                ) from exc
 
-        nb = {"cells": self.cells,
-              "metadata": {
-                  "kernelspec": {"display_name": "Python (saxsnmr)",
-                                 "language": "python", "name": "saxsnmr"},
-                  "language_info": {"name": "python", "version": "3.11"}},
-              "nbformat": 4, "nbformat_minor": 5}
+        nb = {
+            "cells": self.cells,
+            "metadata": {
+                "kernelspec": {
+                    "display_name": "Python (saxsnmr)",
+                    "language": "python",
+                    "name": "saxsnmr",
+                },
+                "language_info": {"name": "python", "version": "3.11"},
+            },
+            "nbformat": 4,
+            "nbformat_minor": 5,
+        }
         out = REPO / "notebooks" / self.s.filename
         out.write_text(json.dumps(nb, indent=1), encoding="utf-8")
         return out, len(self.cells)
@@ -421,7 +481,8 @@ else:
     print("\\nenvironment OK -- openmm", openmm.__version__)
 """)
 
-    code("""
+    code(
+        """
 import sys
 from pathlib import Path
 
@@ -444,7 +505,8 @@ WORK = Path("work") / "__SLUG__"
 WORK.mkdir(parents=True, exist_ok=True)
 fetcher = Fetcher(cache_dir=Path("work") / "cache")
 UNIPROT = "__UNIPROT__"
-""".replace("__SLUG__", s.slug.replace("phase1_", "")))
+""".replace("__SLUG__", s.slug.replace("phase1_", ""))
+    )
 
     md("""
 ## 1. Which entries actually describe the same molecule?
@@ -566,7 +628,8 @@ axk.legend(fontsize=8)
 plt.tight_layout()
 """)
 
-    md("""
+    md(
+        """
 For a compact, well-folded particle the Kratky peak sits near `qRg = 1.73`.
 If a target does not show that, the premise that one short trajectory
 represents its solution ensemble is already in doubt, and a poor chi-squared
@@ -578,11 +641,14 @@ SASBDB links a structure for only about 15% of entries, so coordinates come
 from PDBe/SIFTS keyed on UniProt, falling back to AlphaFold.
 
 Preparation strips pre-existing hydrogens, resolves alternate conformations and
-selects a single chain. """ + s.structure_note + """
+selects a single chain. """
+        + s.structure_note
+        + """
 
 The chain identifier is taken from the SIFTS mapping rather than assumed to be
 `A`. For a protein solved inside a larger assembly it very often is not.
-""")
+"""
+    )
 
     code("""
 hits = fetcher.best_structures(UNIPROT)[:5]
@@ -797,19 +863,26 @@ ax.legend(fontsize=8)
 plt.tight_layout()
 """)
 
-    md("""
+    md(
+        """
 A model whose P(r) extends past the experimental Dmax is too large — and
 because SAXS is most sensitive to exactly that, it is the first thing to check
 when chi-squared is poor.
 
 ## 5c. Neutron scattering — a prediction, not a validation
-""" + (f"""
+"""
+        + (
+            f"""
 **There is no deposited SANS curve for {s.short}.** SASBDB has none for this
 molecule, so everything below is a forward prediction with nothing to check it
 against. It is included because the contrast behaviour is informative in its
 own right, and because the same code *is* validated against experiment in
 `05_sans_validation.ipynb` — read that one before trusting these numbers.
-""" if not s.sans_code else "") + """
+"""
+            if not s.sans_code
+            else ""
+        )
+        + """
 Neutrons scatter from nuclei, so the scattering length carries no q
 dependence — the calculation is simpler than the X-ray case, and reuses the
 same distance histograms. What makes it physically different is hydrogen:
@@ -822,7 +895,8 @@ same distance histograms. What makes it physically different is hydrogen:
   from atom names.
 - **Hydrogen scatters incoherently** — 80.3 barn against 1.76 coherent — which
   contributes a large flat background carrying no structural information.
-""")
+"""
+    )
 
     code("""
 from saxsnmr import (sans_tables, sans_profile, sans_fit, sans_elements,
@@ -1237,7 +1311,7 @@ def build_sans_validation() -> Notebook:
     molecule, and most of its checks have analytically known answers that do
     not depend on any particular protein.
     """
-    s = SYSTEMS[0]                      # borrows lysozyme as a test article
+    s = SYSTEMS[0]  # borrows lysozyme as a test article
     nb = Notebook(s)
     md, code = nb.md, nb.code
     nb.s = System(**{**s.__dict__, "index": "05", "slug": "sans_validation"})
@@ -1671,8 +1745,13 @@ def main(argv):
     def matches(s: System) -> bool:
         if not wanted:
             return True
-        keys = {s.slug, s.slug.replace("phase1_", ""), s.index,
-                s.short.lower().replace(" ", "_"), s.uniprot.lower()}
+        keys = {
+            s.slug,
+            s.slug.replace("phase1_", ""),
+            s.index,
+            s.short.lower().replace(" ", "_"),
+            s.uniprot.lower(),
+        }
         return bool(wanted & keys)
 
     want_sans = (not wanted) or bool(wanted & {"sans", "sans_validation", "05"})
@@ -1680,7 +1759,8 @@ def main(argv):
     if wanted and not chosen and not want_sans:
         names = ", ".join(s.slug.replace("phase1_", "") for s in SYSTEMS)
         raise SystemExit(
-            f"no system matched {sorted(wanted)}; try one of: {names}, sans")
+            f"no system matched {sorted(wanted)}; try one of: {names}, sans"
+        )
     for s in chosen:
         out, n = build(s).write()
         print(f"wrote {out.name} ({n} cells)  [{s.short}]")

@@ -300,6 +300,7 @@ modules:
 
 ```python
 import sys
+
 for m in [k for k in sys.modules if k == "saxsnmr" or k.startswith("saxsnmr.")]:
     del sys.modules[m]
 ```
