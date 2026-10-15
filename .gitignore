@@ -15,3 +15,7 @@ __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
 .venv/
+
+# A clone of this repo made by a notebook's setup cell. Harmless, but it must
+# never be committed into the repo it is a copy of.
+saxsnmr_repo/

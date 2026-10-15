@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "saxsnmr"
+version = "0.1.0"
+description = "Validation harness comparing simulated SAXS, SANS and NMR observables against deposited experimental data"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Anand Wadurkar" }]
+keywords = ["SAXS", "SANS", "NMR", "molecular-dynamics", "structural-biology"]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Programming Language :: Python :: 3.11",
+]
+
+# Runtime dependencies are deliberately NOT pinned here. The supported
+# install path is environment.yml, because OpenMM, mdtraj and pdbfixer need
+# conda-forge builds -- pip wheels of OpenMM conflict with Anaconda's runtime
+# on Windows and crash the interpreter. Listing versions in both places would
+# let them drift apart silently.
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "requests",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.6", "pre-commit"]
+
+[project.urls]
+Repository = "https://github.com/anandswadurkar/Computational-Small-Angle-X-ray-Scattering-SAXS-and-Nuclear-Magnetic-Resonance-NMR-for-Biomolecules"
+
+[tool.setuptools]
+packages = ["saxsnmr"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    # Anything reaching SASBDB, PDBe, RCSB or BMRB. Deselect with
+    # `-m "not network"` to run the offline suite, which is most of it.
+    "network: needs internet or a warm fetch cache",
+    "slow: runs molecular dynamics; minutes, not seconds",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:mdtraj.*",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+extend-exclude = ["notebooks"]          # generated output, not source
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # import sorting
+    "B",         # bugbear
+    "UP",        # pyupgrade
+    "NPY",       # numpy-specific rules
+    "RUF",
+]
+ignore = [
+    # The physics notation in this codebase is single-letter by convention
+    # (q, r, b, c1, c2) and renaming it would make the code harder to check
+    # against the literature, not easier.
+    "E741",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The generator is mostly long embedded notebook source and Markdown prose.
+# Wrapping those strings to 88 columns would corrupt the cells they produce,
+# and the "ambiguous" characters are deliberate typography -- en dashes and
+# the subscript in D₂O are correct in rendered Markdown.
+"tools/make_notebook.py" = ["E501", "RUF001", "RUF002", "RUF003"]
+# Docstrings here quote nuclear data and cite units with the same typography.
+"saxsnmr/sans.py" = ["RUF002", "RUF003"]

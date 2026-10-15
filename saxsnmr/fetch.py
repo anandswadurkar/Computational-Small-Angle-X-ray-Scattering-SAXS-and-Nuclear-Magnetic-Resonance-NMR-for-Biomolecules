@@ -23,17 +23,19 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 import requests
 
 __all__ = [
-    "Fetcher",
-    "SaxsCurve",
     "Construct",
+    "Fetcher",
+    "Pddf",
+    "SaxsCurve",
     "StructureHit",
 ]
 
@@ -53,24 +55,77 @@ _UNIT_TO_INV_ANGSTROM = {
 }
 
 
+def _nm_to_A(value: float | None) -> float | None:
+    """SASBDB reports Rg and Dmax in nm regardless of its angular unit."""
+    return None if value is None else float(value) * 10.0
+
+
+@dataclass
+class Pddf:
+    """An experimental pair-distance distribution, in Angstrom.
+
+    This is GNOM's indirect Fourier transform of the measured intensity, not
+    the raw data: its shape depends on the Dmax and regularisation the
+    depositor chose. Treat it as a second opinion about the molecule's size,
+    not as an independent measurement.
+    """
+
+    code: str
+    r: np.ndarray
+    p: np.ndarray
+    error: np.ndarray
+    source: str
+
+    @property
+    def dmax(self) -> float:
+        """Where GNOM's P(r) was terminated -- a fitted choice, not a datum."""
+        return float(self.r[-1])
+
+    @property
+    def rg(self) -> float:
+        """Rg from the second moment, the same way `rg_from_pr` computes it."""
+        total = self.p.sum()
+        if total <= 0:
+            return float("nan")
+        return float(np.sqrt((self.r**2 * self.p).sum() / (2.0 * total)))
+
+    def normalised(self) -> np.ndarray:
+        peak = self.p.max()
+        return self.p / peak if peak > 0 else self.p
+
+    def __repr__(self) -> str:
+        return (
+            f"Pddf({self.code}, n={self.r.size}, "
+            f"Dmax={self.dmax:.1f} A, Rg={self.rg:.2f} A)"
+        )
+
+
 @dataclass
 class SaxsCurve:
-    """An experimental scattering curve, always in 1/A."""
+    """An experimental scattering curve, always in 1/A.
+
+    The reported Rg and Dmax are converted to **Angstrom** to match q, which
+    SASBDB does not do: it reports q in whichever unit `angular_unit` names but
+    always gives Rg and Dmax in nanometres. Mixing the two silently rescales
+    every length by ten, so the fields carry an explicit `_A` suffix. Anything
+    still reading `curve.guinier_rg` will fail loudly rather than be wrong.
+    """
 
     code: str
     q: np.ndarray
     intensity: np.ndarray
     sigma: np.ndarray | None
     original_unit: str
-    guinier_rg: float | None = None
-    pddf_rg: float | None = None
-    pddf_dmax: float | None = None
+    guinier_rg_A: float | None = None
+    guinier_rg_err_A: float | None = None
+    pddf_rg_A: float | None = None
+    pddf_dmax_A: float | None = None
 
     @property
     def q_range(self) -> tuple[float, float]:
         return float(self.q.min()), float(self.q.max())
 
-    def trim(self, q_max: float = 0.5) -> "SaxsCurve":
+    def trim(self, q_max: float = 0.5) -> SaxsCurve:
         """Restrict to the range where an implicit hydration shell is valid.
 
         Beyond roughly 0.5 1/A the solvent's own structure contributes and a
@@ -84,15 +139,18 @@ class SaxsCurve:
             intensity=self.intensity[m],
             sigma=None if self.sigma is None else self.sigma[m],
             original_unit=self.original_unit,
-            guinier_rg=self.guinier_rg,
-            pddf_rg=self.pddf_rg,
-            pddf_dmax=self.pddf_dmax,
+            guinier_rg_A=self.guinier_rg_A,
+            guinier_rg_err_A=self.guinier_rg_err_A,
+            pddf_rg_A=self.pddf_rg_A,
+            pddf_dmax_A=self.pddf_dmax_A,
         )
 
     def __repr__(self) -> str:
         lo, hi = self.q_range
-        return (f"SaxsCurve({self.code}, n={self.q.size}, "
-                f"q={lo:.4f}-{hi:.3f} 1/A, from {self.original_unit})")
+        return (
+            f"SaxsCurve({self.code}, n={self.q.size}, "
+            f"q={lo:.4f}-{hi:.3f} 1/A, from {self.original_unit})"
+        )
 
 
 @dataclass
@@ -146,7 +204,13 @@ class Fetcher:
         if binary:
             path.write_bytes(r.content)
             return r.content
-        path.write_text(r.text, encoding="utf-8")
+        # newline="" disables newline translation on write. Without it, text
+        # that already contains CRLF -- which these servers send -- has its LF
+        # translated again on Windows, producing CRLFCR... and a spurious blank
+        # line between every real one when the file is read back. Parsers that
+        # skip blanks survive that; anything that treats a blank line as the
+        # end of a block silently truncates at the first row.
+        path.write_text(r.text, encoding="utf-8", newline="")
         return r.text
 
     # ---------------------------------------------------------------- SASBDB
@@ -158,27 +222,33 @@ class Fetcher:
         returns HTTP 500 -- so this parses the HTML result page. It is the most
         fragile call in the module and will break if SASBDB restyles its site.
         """
-        html = self._cached(f"sasbdb_search_{_slug(term)}.html",
-                            f"{SASBDB}/search/?q={requests.utils.quote(term)}")
+        html = self._cached(
+            f"sasbdb_search_{_slug(term)}.html",
+            f"{SASBDB}/search/?q={requests.utils.quote(term)}",
+        )
         return sorted(set(re.findall(r"SASD[A-Z]{2}\d", html)))
 
     def sasbdb_entry(self, code: str) -> dict:
-        txt = self._cached(f"sasbdb_{code}.json",
-                           f"{SASBDB}/rest-api/entry/summary/{code}/")
+        txt = self._cached(
+            f"sasbdb_{code}.json", f"{SASBDB}/rest-api/entry/summary/{code}/"
+        )
         return json.loads(txt)
 
     def constructs(self, code: str) -> list[Construct]:
         entry = self.sasbdb_entry(code)
-        mols = (entry.get("experiment", {}).get("sample", {}) or {}).get("molecule", []) or []
+        sample = entry.get("experiment", {}).get("sample", {}) or {}
+        mols = sample.get("molecule", []) or []
         out = []
         for m in mols:
-            out.append(Construct(
-                name=m.get("name") or m.get("molecule_name"),
-                molecular_type=m.get("molecular_type"),
-                organism=m.get("organism"),
-                uniprot=(m.get("uniprot_code") or None),
-                sequence=m.get("sequence"),
-            ))
+            out.append(
+                Construct(
+                    name=m.get("name") or m.get("molecule_name"),
+                    molecular_type=m.get("molecular_type"),
+                    organism=m.get("organism"),
+                    uniprot=(m.get("uniprot_code") or None),
+                    sequence=m.get("sequence"),
+                )
+            )
         return out
 
     def sasbdb_curve(self, code: str) -> SaxsCurve:
@@ -192,8 +262,9 @@ class Fetcher:
                 "-- inferring units from magnitude silently corrupts q by 10x."
             )
 
-        text = self._cached(f"sasbdb_{code}.dat",
-                            f"{SASBDB}/media/intensities_files/{code}.dat")
+        text = self._cached(
+            f"sasbdb_{code}.dat", f"{SASBDB}/media/intensities_files/{code}.dat"
+        )
         q, i, s = [], [], []
         for line in text.splitlines():
             parts = line.split()
@@ -217,29 +288,120 @@ class Fetcher:
             intensity=np.asarray(i),
             sigma=None if np.all(np.isnan(sig)) else sig,
             original_unit=declared,
-            guinier_rg=entry.get("guinier_rg"),
-            pddf_rg=entry.get("pddf_rg"),
-            pddf_dmax=entry.get("pddf_dmax"),
+            # SASBDB reports these in nm whatever angular_unit says; see the
+            # SaxsCurve docstring for why they are converted here.
+            guinier_rg_A=_nm_to_A(entry.get("guinier_rg")),
+            guinier_rg_err_A=_nm_to_A(entry.get("guinier_rg_error")),
+            pddf_rg_A=_nm_to_A(entry.get("pddf_rg")),
+            pddf_dmax_A=_nm_to_A(entry.get("pddf_dmax")),
         )
+
+    def pddf(self, code: str) -> Pddf:
+        """Experimental P(r), parsed from the deposited GNOM output file.
+
+        SASBDB links the raw `.out` file that ATSAS GNOM produced. Everything
+        before the distance-distribution block is GNOM's own log -- settings,
+        the regularised fit, perceptual criteria -- and is skipped.
+
+        **R is in whatever length unit matches the entry's `angular_unit`**, not
+        always Angstrom: a curve deposited in 1/nm has its P(r) in nm. The file
+        itself carries no unit label, so this is only detectable by noticing
+        that Dmax came out ten times too small -- which is easy to miss when
+        the number is still plausible-looking. The conversion below uses the
+        same declared unit the curve does, and the result is always Angstrom.
+        """
+        entry = self.sasbdb_entry(code)
+        url = entry.get("pddf_data")
+        if not url:
+            raise ValueError(f"{code}: no P(r) file deposited")
+
+        declared = (entry.get("angular_unit") or "").strip()
+        q_scale = _UNIT_TO_INV_ANGSTROM.get(declared.lower())
+        if q_scale is None:
+            raise ValueError(
+                f"{code}: unrecognised angular_unit {declared!r}; refusing to "
+                "guess the P(r) length unit."
+            )
+        # q in 1/nm means lengths in nm, so r must be multiplied by 10.
+        r_scale = 1.0 / q_scale if q_scale != 1.0 else 1.0
+
+        text = self._cached(f"sasbdb_{code}_pofr.out", url)
+        lines = text.splitlines()
+        start = None
+        for i, line in enumerate(lines):
+            parts = line.split()
+            if [p.upper() for p in parts[:3]] == ["R", "P(R)", "ERROR"]:
+                start = i + 1
+                break
+        if start is None:
+            raise ValueError(f"{code}: no 'R P(R) ERROR' block in the GNOM file")
+
+        r, p, err = [], [], []
+        for line in lines[start:]:
+            parts = line.split()
+            if not parts:
+                continue  # blank lines separate nothing here
+            if len(parts) != 3:
+                if r:
+                    break  # a real trailing section
+                continue
+            try:
+                vals = [float(x) for x in parts]
+            except ValueError:
+                if r:
+                    break
+                continue
+            r.append(vals[0])
+            p.append(vals[1])
+            err.append(vals[2])
+
+        if len(r) < 3:
+            raise ValueError(f"{code}: parsed only {len(r)} P(r) points")
+
+        pddf = Pddf(
+            code=code,
+            r=np.asarray(r) * r_scale,
+            p=np.asarray(p),
+            error=np.asarray(err),
+            source=url,
+        )
+
+        # Cross-check against the entry's own Dmax, which is reported in nm
+        # and converted on the way in. Disagreement means the unit inference
+        # above is wrong, and a silently rescaled P(r) is worse than none.
+        stated = _nm_to_A(entry.get("pddf_dmax"))
+        if stated and abs(pddf.dmax - stated) > max(1.0, 0.05 * stated):
+            raise ValueError(
+                f"{code}: P(r) ends at {pddf.dmax:.1f} A but the entry reports "
+                f"Dmax {stated:.1f} A. The GNOM file's length unit does not "
+                f"match angular_unit {declared!r}; not guessing."
+            )
+        return pddf
 
     # ------------------------------------------------------------- structures
 
     def best_structures(self, uniprot: str) -> list[StructureHit]:
         """Experimental structures for an accession, best first (PDBe/SIFTS)."""
         try:
-            txt = self._cached(f"pdbe_best_{uniprot}.json",
-                               f"{PDBE}/mappings/best_structures/{uniprot}")
+            txt = self._cached(
+                f"pdbe_best_{uniprot}.json",
+                f"{PDBE}/mappings/best_structures/{uniprot}",
+            )
         except requests.HTTPError:
             return []
         hits = json.loads(txt).get(uniprot, [])
-        return [StructureHit(
-            pdb_id=h["pdb_id"], chain_id=h["chain_id"],
-            resolution=h.get("resolution"),
-            method=h.get("experimental_method"),
-            start=h.get("unp_start") or h.get("start"),
-            end=h.get("unp_end") or h.get("end"),
-            coverage=h.get("coverage"),
-        ) for h in hits]
+        return [
+            StructureHit(
+                pdb_id=h["pdb_id"],
+                chain_id=h["chain_id"],
+                resolution=h.get("resolution"),
+                method=h.get("experimental_method"),
+                start=h.get("unp_start") or h.get("start"),
+                end=h.get("unp_end") or h.get("end"),
+                coverage=h.get("coverage"),
+            )
+            for h in hits
+        ]
 
     def pdb_file(self, pdb_id: str) -> Path:
         key = f"{pdb_id.lower()}.pdb"
@@ -286,7 +448,8 @@ class Fetcher:
 
         txt = self._cached(
             f"bmrb_{bmrb_id}_cs.json",
-            f"{BMRB_API}/entry/{bmrb_id}?saveframe_category=assigned_chemical_shifts")
+            f"{BMRB_API}/entry/{bmrb_id}?saveframe_category=assigned_chemical_shifts",
+        )
         data = json.loads(txt).get(str(bmrb_id), {}).get("assigned_chemical_shifts", [])
         frames = []
         for sf in data:
@@ -300,9 +463,15 @@ class Fetcher:
             return None
 
         df = pd.concat(frames, ignore_index=True)
-        keep = {"Comp_index_ID": "resid", "Seq_ID": "seq_id", "Comp_ID": "resname",
-                "Atom_ID": "atom", "Atom_type": "element", "Val": "shift",
-                "Val_err": "shift_err"}
+        keep = {
+            "Comp_index_ID": "resid",
+            "Seq_ID": "seq_id",
+            "Comp_ID": "resname",
+            "Atom_ID": "atom",
+            "Atom_type": "element",
+            "Val": "shift",
+            "Val_err": "shift_err",
+        }
         df = df[[c for c in keep if c in df.columns]].rename(columns=keep)
         for col in ("resid", "seq_id"):
             if col in df:
@@ -317,7 +486,7 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
 
 
-def summarise_constructs(fetcher: Fetcher, codes: Iterable[str]) -> "Any":
+def summarise_constructs(fetcher: Fetcher, codes: Iterable[str]) -> Any:
     """Side-by-side construct table for candidate entries.
 
     Intended to be read before joining anything. Differing sequence lengths or
@@ -331,17 +500,20 @@ def summarise_constructs(fetcher: Fetcher, codes: Iterable[str]) -> "Any":
         try:
             entry = fetcher.sasbdb_entry(code)
             for c in fetcher.constructs(code):
-                rows.append({
-                    "code": code,
-                    "uniprot": c.uniprot,
-                    "type": c.molecular_type,
-                    "organism": c.organism,
-                    "length": c.length,
-                    "guinier_rg": entry.get("guinier_rg"),
-                    "pddf_dmax": entry.get("pddf_dmax"),
-                    "angular_unit": entry.get("angular_unit"),
-                    "type_of_curve": entry.get("type_of_curve"),
-                })
+                rows.append(
+                    {
+                        "code": code,
+                        "uniprot": c.uniprot,
+                        "type": c.molecular_type,
+                        "organism": c.organism,
+                        "length": c.length,
+                        # Angstrom, like every other length this package returns.
+                        "guinier_rg_A": _nm_to_A(entry.get("guinier_rg")),
+                        "pddf_dmax_A": _nm_to_A(entry.get("pddf_dmax")),
+                        "angular_unit": entry.get("angular_unit"),
+                        "type_of_curve": entry.get("type_of_curve"),
+                    }
+                )
         except Exception as exc:  # a dead entry should not kill the survey
             rows.append({"code": code, "uniprot": f"ERROR: {exc}"})
     return pd.DataFrame(rows)

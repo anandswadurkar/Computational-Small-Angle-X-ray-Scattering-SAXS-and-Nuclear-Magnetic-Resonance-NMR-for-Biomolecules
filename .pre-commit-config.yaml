@@ -1,0 +1,27 @@
+# Run `pre-commit install` once; it then checks staged files on every commit.
+#
+# The notebooks are build output from tools/make_notebook.py, so they are
+# excluded from formatting here. Regenerating them is what keeps them correct,
+# and a formatter rewriting generated JSON would make its diffs unreadable.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.ipynb$'
+      - id: end-of-file-fixer
+        exclude: '\.ipynb$'
+      - id: check-yaml
+      - id: check-toml
+      # Generated trajectories and caches must never reach the repo; this is
+      # a backstop behind .gitignore.
+      - id: check-added-large-files
+        args: [--maxkb=2048]
+      - id: check-merge-conflict

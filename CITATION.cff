@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "saxsnmr: a validation harness for simulated SAXS, SANS and NMR observables"
+abstract: >-
+  Fetches experimental SAXS curves and NMR chemical shifts for a protein,
+  runs short implicit-solvent molecular dynamics from a matched structure,
+  and reports how well the simulated observables reproduce the measured
+  ones. Includes a dependency-free SAXS calculator, a neutron forward
+  model, and controls that make an agreement figure interpretable.
+type: software
+authors:
+  - family-names: Wadurkar
+    given-names: Anand
+    affiliation: Syracuse University
+version: 0.1.0
+date-released: 2026-10-14
+license: MIT
+repository-code: "https://github.com/anandswadurkar/Computational-Small-Angle-X-ray-Scattering-SAXS-and-Nuclear-Magnetic-Resonance-NMR-for-Biomolecules"
+keywords:
+  - small-angle X-ray scattering
+  - small-angle neutron scattering
+  - nuclear magnetic resonance
+  - molecular dynamics
+  - structural biology

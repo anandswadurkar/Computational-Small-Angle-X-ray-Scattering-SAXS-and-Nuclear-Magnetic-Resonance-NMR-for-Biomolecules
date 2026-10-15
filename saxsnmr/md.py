@@ -19,7 +19,14 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["PreparedStructure", "prepare", "sanitise_pdb", "run_md", "MDResult", "benchmark"]
+__all__ = [
+    "MDResult",
+    "PreparedStructure",
+    "benchmark",
+    "prepare",
+    "run_md",
+    "sanitise_pdb",
+]
 
 
 @dataclass
@@ -32,8 +39,12 @@ class PreparedStructure:
     sequence: str
 
 
-def sanitise_pdb(pdb_path: str | Path, out_path: str | Path,
-                 chain: str | None = None, altloc: str = "A") -> dict[str, int]:
+def sanitise_pdb(
+    pdb_path: str | Path,
+    out_path: str | Path,
+    chain: str | None = None,
+    altloc: str = "A",
+) -> dict[str, int]:
     """Reduce a deposited PDB to something a force field can accept.
 
     Three things in real deposited files break downstream tools, all of them
@@ -48,11 +59,30 @@ def sanitise_pdb(pdb_path: str | Path, out_path: str | Path,
       (protein and solvent), so selecting a chain by identifier alone keeps both.
       Filtering here, on the text, is unambiguous.
 
+    * **Bookkeeping records belonging to discarded chains.** ``TER`` and
+      ``SSBOND`` carry their own chain identifiers and must be filtered too. A
+      ``TER`` for a chain that was dropped can land before the first retained
+      atom, and OpenMM's PDB reader then fails with
+      ``'NoneType' object has no attribute '_current_chain'`` -- a message that
+      says nothing about chains being the problem. This only shows up when the
+      wanted chain is not the first one in the file, which is why the reference
+      structure never exposed it.
+
     Returns a count of what was dropped so callers can report it.
     """
     src = Path(pdb_path).read_text(errors="replace").splitlines()
-    stats = {"kept": 0, "hydrogens": 0, "altloc": 0, "other_chain": 0}
+    stats = {
+        "kept": 0,
+        "hydrogens": 0,
+        "altloc": 0,
+        "other_chain": 0,
+        "other_chain_records": 0,
+    }
     out: list[str] = []
+    seen_atom = False
+
+    def chain_of(line: str, col: int) -> str | None:
+        return line[col] if len(line) > col else None
 
     for line in src:
         rec = line[:6]
@@ -71,7 +101,27 @@ def sanitise_pdb(pdb_path: str | Path, out_path: str | Path,
                 continue
             out.append(line[:16] + " " + line[17:])
             stats["kept"] += 1
-        elif rec.startswith(("TER", "END", "CRYST", "MODEL", "ENDMDL", "SSBOND")):
+            seen_atom = True
+        elif rec.startswith("TER"):
+            # A TER for a discarded chain, or one before any kept atom, breaks
+            # the reader rather than being ignored.
+            if not seen_atom:
+                stats["other_chain_records"] += 1
+                continue
+            if chain is not None and chain_of(line, 21) not in (None, chain):
+                stats["other_chain_records"] += 1
+                continue
+            out.append(line)
+        elif rec.startswith("SSBOND"):
+            # Columns 16 and 30 hold the two partner chains; a disulfide to a
+            # chain that is gone would be a dangling restraint.
+            if chain is not None and any(
+                chain_of(line, c) not in (None, chain) for c in (15, 29)
+            ):
+                stats["other_chain_records"] += 1
+                continue
+            out.append(line)
+        elif rec.startswith(("END", "CRYST", "MODEL", "ENDMDL")):
             out.append(line)
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -79,9 +129,14 @@ def sanitise_pdb(pdb_path: str | Path, out_path: str | Path,
     return stats
 
 
-def prepare(pdb_path: str | Path, out_path: str | Path, chain: str | None = None,
-            mutations: list[str] | None = None, ph: float = 7.0,
-            keep_heterogens: bool = False) -> PreparedStructure:
+def prepare(
+    pdb_path: str | Path,
+    out_path: str | Path,
+    chain: str | None = None,
+    mutations: list[str] | None = None,
+    ph: float = 7.0,
+    keep_heterogens: bool = False,
+) -> PreparedStructure:
     """Clean a PDB for simulation: one chain, no solvent, complete, protonated.
 
     ``mutations`` uses PDBFixer's notation, e.g. ``["ALA-57-GLY"]`` meaning
@@ -138,17 +193,27 @@ class MDResult:
     ns_per_day: float
 
     def __repr__(self) -> str:
-        return (f"MDResult({self.n_frames} frames, {self.simulated_ps:.0f} ps, "
-                f"{self.platform}, {self.ns_per_day:.2f} ns/day)")
+        return (
+            f"MDResult({self.n_frames} frames, {self.simulated_ps:.0f} ps, "
+            f"{self.platform}, {self.ns_per_day:.2f} ns/day)"
+        )
 
 
-def run_md(prepared: PreparedStructure, out_dir: str | Path,
-           production_ps: float = 50.0, equilibration_ps: float = 5.0,
-           frame_interval_ps: float = 1.0, temperature_K: float = 300.0,
-           timestep_fs: float = 4.0, implicit: str = "implicit/gbn2.xml",
-           cutoff_nm: float = 1.0, hydrogen_mass_amu: float = 4.0,
-           platform: str | None = None, threads: int | None = None,
-           seed: int = 0) -> MDResult:
+def run_md(
+    prepared: PreparedStructure,
+    out_dir: str | Path,
+    production_ps: float = 50.0,
+    equilibration_ps: float = 5.0,
+    frame_interval_ps: float = 1.0,
+    temperature_K: float = 300.0,
+    timestep_fs: float = 4.0,
+    implicit: str = "implicit/gbn2.xml",
+    cutoff_nm: float = 1.0,
+    hydrogen_mass_amu: float = 4.0,
+    platform: str | None = None,
+    threads: int | None = None,
+    seed: int = 0,
+) -> MDResult:
     """Minimise, equilibrate, then run production MD in implicit solvent.
 
     The defaults were chosen by measurement on a laptop CPU, where they give
@@ -191,8 +256,10 @@ def run_md(prepared: PreparedStructure, out_dir: str | Path,
     )
 
     integrator = mm.LangevinMiddleIntegrator(
-        temperature_K * unit.kelvin, 1.0 / unit.picosecond,
-        timestep_fs * unit.femtosecond)
+        temperature_K * unit.kelvin,
+        1.0 / unit.picosecond,
+        timestep_fs * unit.femtosecond,
+    )
     integrator.setRandomNumberSeed(seed)
 
     plat = mm.Platform.getPlatformByName(platform) if platform else None
@@ -230,27 +297,37 @@ def run_md(prepared: PreparedStructure, out_dir: str | Path,
     )
 
 
-def benchmark(prepared: PreparedStructure, ps: float = 10.0,
-              platforms: list[str] | None = None) -> dict[str, float]:
+def benchmark(
+    prepared: PreparedStructure, ps: float = 10.0, platforms: list[str] | None = None
+) -> dict[str, float]:
     """Measure ns/day for each available platform.
 
     Worth running once before planning anything: throughput on an integrated
     GPU or a laptop CPU varies by more than an order of magnitude, and every
     scheduling decision downstream depends on the real number.
     """
-    import openmm as mm
     import tempfile
 
+    import openmm as mm
+
     if platforms is None:
-        platforms = [mm.Platform.getPlatform(i).getName()
-                     for i in range(mm.Platform.getNumPlatforms())]
+        platforms = [
+            mm.Platform.getPlatform(i).getName()
+            for i in range(mm.Platform.getNumPlatforms())
+        ]
 
     results: dict[str, float] = {}
     for name in platforms:
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                res = run_md(prepared, tmp, production_ps=ps, equilibration_ps=2.0,
-                             frame_interval_ps=ps, platform=name)
+                res = run_md(
+                    prepared,
+                    tmp,
+                    production_ps=ps,
+                    equilibration_ps=2.0,
+                    frame_interval_ps=ps,
+                    platform=name,
+                )
             results[name] = res.ns_per_day
         except Exception as exc:
             results[name] = float("nan")
@@ -259,10 +336,30 @@ def benchmark(prepared: PreparedStructure, ps: float = 10.0,
 
 
 _AA3_TO_1 = {
-    "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C", "GLN": "Q",
-    "GLU": "E", "GLY": "G", "HIS": "H", "ILE": "I", "LEU": "L", "LYS": "K",
-    "MET": "M", "PHE": "F", "PRO": "P", "SER": "S", "THR": "T", "TRP": "W",
-    "TYR": "Y", "VAL": "V", "HID": "H", "HIE": "H", "HIP": "H", "CYX": "C",
+    "ALA": "A",
+    "ARG": "R",
+    "ASN": "N",
+    "ASP": "D",
+    "CYS": "C",
+    "GLN": "Q",
+    "GLU": "E",
+    "GLY": "G",
+    "HIS": "H",
+    "ILE": "I",
+    "LEU": "L",
+    "LYS": "K",
+    "MET": "M",
+    "PHE": "F",
+    "PRO": "P",
+    "SER": "S",
+    "THR": "T",
+    "TRP": "W",
+    "TYR": "Y",
+    "VAL": "V",
+    "HID": "H",
+    "HIE": "H",
+    "HIP": "H",
+    "CYX": "C",
 }
 
 

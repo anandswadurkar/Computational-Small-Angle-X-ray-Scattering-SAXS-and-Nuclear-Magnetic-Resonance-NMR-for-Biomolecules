@@ -36,3 +36,10 @@ dependencies:
   # notebook
   - ipykernel=6.29.*
   - py3dmol
+
+  # Development tools. ruff is a standalone Rust binary and pytest is pure
+  # Python, so neither touches the compiled numerical stack -- verified with
+  # `conda install --dry-run`, which reported only new packages and no
+  # updates or downgrades to numpy, scipy, openmm or mdtraj.
+  - ruff
+  - pytest

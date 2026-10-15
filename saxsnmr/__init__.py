@@ -44,19 +44,25 @@ def _repair_windows_dll_path() -> list[str]:
         return []
 
     prefix = Path(_sys.executable).parent
-    if not (prefix / "conda-meta").is_dir() and not (prefix.parent / "conda-meta").is_dir():
-        return []                      # not a conda environment; leave PATH alone
+    if (
+        not (prefix / "conda-meta").is_dir()
+        and not (prefix.parent / "conda-meta").is_dir()
+    ):
+        return []  # not a conda environment; leave PATH alone
 
-    candidates = [prefix,
-                  prefix / "Library" / "mingw-w64" / "bin",
-                  prefix / "Library" / "usr" / "bin",
-                  prefix / "Library" / "bin",
-                  prefix / "Scripts",
-                  prefix / "bin"]
+    candidates = [
+        prefix,
+        prefix / "Library" / "mingw-w64" / "bin",
+        prefix / "Library" / "usr" / "bin",
+        prefix / "Library" / "bin",
+        prefix / "Scripts",
+        prefix / "bin",
+    ]
     current = _os.environ.get("PATH", "")
     present = {p.lower() for p in current.split(_os.pathsep) if p}
-    missing = [str(d) for d in candidates
-               if d.is_dir() and str(d).lower() not in present]
+    missing = [
+        str(d) for d in candidates if d.is_dir() and str(d).lower() not in present
+    ]
     if missing:
         _os.environ["PATH"] = _os.pathsep.join(missing + ([current] if current else []))
     return missing
@@ -66,22 +72,110 @@ DLL_PATH_ADDED = _repair_windows_dll_path()
 
 import numpy as np  # noqa: E402  -- must follow the PATH repair above
 
-from .fetch import Construct, Fetcher, SaxsCurve, StructureHit, summarise_constructs
-from .md import (MDResult, PreparedStructure, benchmark, prepare, run_md,  # noqa: E402
-                 sanitise_pdb)
-from .nmr import ShiftComparison, best_offset, compare_to_dssp, csi_assignment, secondary_shifts
-from .saxs import SaxsFit, ScatteringTables, fit, profile
+from .fetch import (  # noqa: E402
+    Construct,
+    Fetcher,
+    Pddf,
+    SaxsCurve,
+    StructureHit,
+    summarise_constructs,
+)
+from .md import MDResult, PreparedStructure, benchmark, prepare, run_md, sanitise_pdb  # noqa: E402
+from .nmr import (  # noqa: E402
+    ShiftComparison,
+    best_offset,
+    compare_to_dssp,
+    csi_assignment,
+    matthews_corrcoef,
+    secondary_shifts,
+    shift_dispersion,
+    threshold_scan,
+)
+from .sans import (  # noqa: E402
+    NEUTRON_B,
+    SansFit,
+    match_point_d2o,
+    sans_elements,
+    sans_fit,
+    sans_profile,
+    sans_tables,
+    scattering_weighted_rg,
+    solvent_sld,
+)
+from .saxs import (  # noqa: E402
+    GuinierFit,
+    SaxsFit,
+    ScatteringTables,
+    dmax_from_pr,
+    fit,
+    guinier,
+    pair_distribution,
+    profile,
+    rg_from_pr,
+)
+from .stats import (  # noqa: E402
+    BlockAverage,
+    ConvergenceReport,
+    assess_convergence,
+    autocorrelation_time,
+    block_average,
+    equilibration_start,
+    statistical_inefficiency,
+)
 
 __version__ = "0.1.0"
 
 __all__ = [
-    "Fetcher", "SaxsCurve", "Construct", "StructureHit", "summarise_constructs",
-    "prepare", "sanitise_pdb", "run_md", "benchmark", "PreparedStructure", "MDResult",
-    "ScatteringTables", "profile", "fit", "SaxsFit",
-    "secondary_shifts", "csi_assignment", "compare_to_dssp", "best_offset",
-    "ShiftComparison",
-    "frame_tables", "ensemble_fit", "radius_of_gyration", "load_trajectory",
     "DLL_PATH_ADDED",
+    "NEUTRON_B",
+    "BlockAverage",
+    "Construct",
+    "ConvergenceReport",
+    "Fetcher",
+    "GuinierFit",
+    "MDResult",
+    "Pddf",
+    "PreparedStructure",
+    "SansFit",
+    "SaxsCurve",
+    "SaxsFit",
+    "ScatteringTables",
+    "ShiftComparison",
+    "StructureHit",
+    "assess_convergence",
+    "autocorrelation_time",
+    "benchmark",
+    "best_offset",
+    "block_average",
+    "compare_to_dssp",
+    "csi_assignment",
+    "dmax_from_pr",
+    "ensemble_fit",
+    "equilibration_start",
+    "fit",
+    "frame_tables",
+    "guinier",
+    "load_trajectory",
+    "match_point_d2o",
+    "matthews_corrcoef",
+    "pair_distribution",
+    "prepare",
+    "profile",
+    "radius_of_gyration",
+    "rg_from_pr",
+    "run_md",
+    "sanitise_pdb",
+    "sans_elements",
+    "sans_fit",
+    "sans_profile",
+    "sans_tables",
+    "scattering_weighted_rg",
+    "secondary_shifts",
+    "shift_dispersion",
+    "solvent_sld",
+    "statistical_inefficiency",
+    "summarise_constructs",
+    "threshold_scan",
 ]
 
 # Shrake-Rupley gives absolute SASA; dividing by a per-element maximum turns it
@@ -119,7 +213,10 @@ def _elements_and_sasa(traj, frame: int):
 
     sasa = md.shrake_rupley(traj[frame], mode="atom")[0] * 100.0  # nm^2 -> A^2
     elements, frac = [], []
-    for atom, s in zip(traj.topology.atoms, sasa):
+    # strict=True: a mismatch between the topology and the SASA array
+    # would otherwise silently truncate the atom list, producing a
+    # plausible curve for part of the molecule.
+    for atom, s in zip(traj.topology.atoms, sasa, strict=True):
         sym = atom.element.symbol if atom.element is not None else "C"
         if sym not in _MAX_SASA:
             sym = "C"
@@ -128,13 +225,15 @@ def _elements_and_sasa(traj, frame: int):
     return elements, np.asarray(frac)
 
 
-def frame_tables(traj, frame: int, bin_width: float = 0.25,
-                 r_max: float | None = None) -> ScatteringTables:
+def frame_tables(
+    traj, frame: int, bin_width: float = 0.25, r_max: float | None = None
+) -> ScatteringTables:
     """Scattering tables for one trajectory frame (coordinates in angstrom)."""
     elements, frac = _elements_and_sasa(traj, frame)
     xyz = traj.xyz[frame] * 10.0
-    return ScatteringTables.from_coordinates(xyz, elements, frac,
-                                             bin_width=bin_width, r_max=r_max)
+    return ScatteringTables.from_coordinates(
+        xyz, elements, frac, bin_width=bin_width, r_max=r_max
+    )
 
 
 def radius_of_gyration(traj) -> np.ndarray:
@@ -144,9 +243,13 @@ def radius_of_gyration(traj) -> np.ndarray:
     return md.compute_rg(traj) * 10.0
 
 
-def ensemble_fit(md_result: "MDResult | object", curve: SaxsCurve,
-                 stride: int = 1, max_frames: int | None = None,
-                 bin_width: float = 0.25) -> SaxsFit:
+def ensemble_fit(
+    md_result: MDResult | object,
+    curve: SaxsCurve,
+    stride: int = 1,
+    max_frames: int | None = None,
+    bin_width: float = 0.25,
+) -> SaxsFit:
     """Average I(q) over trajectory frames, then fit scale, c1 and c2 once.
 
     Averaging intensities before fitting (rather than fitting each frame) is the
